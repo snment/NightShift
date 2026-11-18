@@ -25,7 +25,7 @@ export function defaultBotRefusal(name: string): string {
  * allowed on a default bot; any other `defaultBot` value is refused — the flag is set at creation, never by PATCH. */
 export function defaultBotPatchRefusal(bot: BotRecord | null, body: Record<string, unknown>): string | null {
   for (const key of ["sidebarHidden", "welcomed"]) if (body[key] !== undefined && typeof body[key] !== "boolean") return `${key} must be true or false`;
-  if ((body.sidebarHidden !== undefined || body.welcomed !== undefined) && !bot?.defaultBot) return "Only MausBot is hidden this way; archive or delete other bots.";
+  if ((body.sidebarHidden !== undefined || body.welcomed !== undefined) && !bot?.defaultBot) return `Only ${DEFAULT_BOT_NAME} is hidden this way; archive or delete other bots.`;
   if (body.defaultBot !== undefined && body.defaultBot !== null) return "defaultBot can only be cleared (null), never set by a patch";
   return body.hidden === true && bot?.defaultBot ? defaultBotRefusal(bot.name) : null;
 }
