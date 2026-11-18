@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -9,6 +9,8 @@ import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
 import { readRegistry, writeRegistry } from "./testing/registry.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
+// The open-source edition has no enterprise/ layer (LICENSING.md), so these hosted tests need it present.
+const ENTERPRISE = existsSync(join(ROOT, "enterprise", "server", "workspace-access.ts"));
 const TOKEN = `omb_workspace_${"s".repeat(43)}`;
 const ORIGINAL_TEXT = "Preserve this synthetic conversation through model changes.";
 const INITIAL = {
@@ -112,6 +114,7 @@ async function expectCatalog(grants: Grants) {
 }
 
 beforeAll(async () => {
+  if (!ENTERPRISE) return;
   layer = mkdtempSync(join(tmpdir(), "omb-hosted-model-layer-"));
   mkdirSync(join(layer, "server"));
   writeFileSync(join(layer, "server/index.ts"), `
@@ -187,7 +190,7 @@ afterAll(async () => {
   if (layer) await removeTempDir(layer);
 });
 
-describe("hosted model policy in the full runtime", () => {
+describe.skipIf(!ENTERPRISE)("hosted model policy in the full runtime", () => {
   it("advertises only assignments and reconciles saved choices without changing conversation history", async () => {
     await expectCatalog(INITIAL);
     const health = await api("GET", "/api/health/hosted");

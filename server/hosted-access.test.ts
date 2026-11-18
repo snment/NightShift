@@ -1,6 +1,6 @@
 // The HTTPS backchannel is injected, never redirected to a real portal.
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { request, type IncomingMessage } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -12,6 +12,8 @@ import { SessionRegistry } from "./sessions.ts";
 import { HOSTED_CONTRACT_HEADER, HOSTED_CONTRACT_METADATA } from "./hosted-contract.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+// The open-source edition has no enterprise/ layer (LICENSING.md), so these hosted tests need it present.
+const ENTERPRISE = existsSync(join(ROOT, "enterprise", "server", "workspace-access.ts"));
 let PORT: number;
 const HOST = "acme.example.test";
 const EMAIL = "member@example.test";
@@ -92,6 +94,7 @@ async function restart(env: NodeJS.ProcessEnv = {}) {
 }
 
 beforeAll(async () => {
+  if (!ENTERPRISE) return;
   PORT = await freePortBlock([0, 1], 35_000, 5_000);
   home = mkdtempSync(join(tmpdir(), "omb-hosted-server-"));
   stateFile = join(home, "portal-fixture.json"); state();
@@ -141,6 +144,7 @@ beforeAll(async () => {
   throw new Error(`Owned hosted fixture failed to start:\n${log}`);
 }, 30_000);
 afterAll(async () => {
+  if (!ENTERPRISE) return;
   await waitForExit(child, { signal: "SIGTERM" });
   const evidenceDir = join(tmpdir(), "openmausbot-verification-evidence");
   mkdirSync(evidenceDir, { recursive: true });
@@ -151,7 +155,7 @@ afterAll(async () => {
   await removeTempDir(home);
 });
 
-describe("hosted bridge in the full server", () => {
+describe.skipIf(!ENTERPRISE)("hosted bridge in the full server", () => {
   it("loads the optional hook before listening, redirects hosted navigation, and disables legacy sign-in", async () => {
     expect(log).toContain("enterprise edition for Fixture");
     expect((await call("/")).location).toBe("/api/auth/hosted/start");
