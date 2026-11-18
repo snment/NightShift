@@ -102,8 +102,34 @@ export type MausAvatarProps = {
   kind?: AvatarKind;
 };
 
+/** The upstream mascot is a Supamaus trademark (LICENSING.md), so NightShift draws a neutral disc instead. The mascot
+ * geometry and its renderers stay for a Phase 1 asset swap. */
+const SHOW_UPSTREAM_MASCOT = false;
+
+function NeutralAvatarComponent({ color, size = 44, label, gradient, kind }: MausAvatarProps, ref: React.Ref<MausAvatarHandle>) {
+  useImperativeHandle(ref, () => ({ blink: () => {}, spin: () => {}, setExpression: () => {} }));
+  const [from, via, to] = gradient ?? gradientFor(color);
+  const initial = [...(label?.trim() ?? "")][0]?.toUpperCase() ?? "";
+  return (
+    <span
+      {...avatarMarks(kind, "mascot")}
+      role={label ? "img" : undefined}
+      aria-label={label || undefined}
+      aria-hidden={label ? undefined : true}
+      title={label || undefined}
+      className="inline-flex shrink-0 select-none items-center justify-center rounded-full font-semibold text-white"
+      style={{ width: size, height: size, fontSize: size * 0.42, background: `linear-gradient(135deg, ${from}, ${via}, ${to})` }}
+    >
+      {initial}
+    </span>
+  );
+}
+
+const NeutralAvatar = forwardRef(NeutralAvatarComponent);
+
 function MausAvatarComponent(props: MausAvatarProps, ref: React.Ref<MausAvatarHandle>) {
   const { bodyId, color, size, state, motion, motionKey, gaze, trackPointer, animated, label, kind } = props;
+  if (!SHOW_UPSTREAM_MASCOT) return <NeutralAvatar ref={ref} {...props} />;
   if (isCarvedBody(bodyId)) {
     return (
       <CarvedAvatar

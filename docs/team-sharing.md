@@ -1,6 +1,6 @@
 # Sharing a bot or a department
 
-A bot or a whole department can be shared as a **template**: a small folder anyone can add to their own MausBot.
+A bot or a whole department can be shared as a **template**: a small folder anyone can add to their own NightShift.
 
 - **A bot.** Ask it in chat ("publish yourself to GitHub", "export yourself"), or use **Share → Share as template**.
   The app sends the bot "Create a public template of yourself that I can share with somebody else"; the bot makes the
@@ -43,7 +43,7 @@ their interpreter (`python3 scripts/report.py`). Older apps ignore the extra fil
 
 **Publish** sends the folder to the MausBot Admin, which opens a pull request on the community repository
 (`milind-soni/openmausbot-teams`); nobody needs a GitHub account. The card then has **Copy link**, a GitHub folder link
-that **Import…** accepts, and **View on GitHub**. Publishing needs a MausBot sign-in; without one, the card offers
+that **Import…** accepts, and **View on GitHub**. Publishing needs a NightShift sign-in; without one, the card offers
 **Save folder…** and **Upload on GitHub**, the repository's own upload page. The community repository takes each skill's
 SKILL.md alone for now, so a published template leaves its scripts out; the other targets keep them.
 

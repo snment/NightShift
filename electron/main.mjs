@@ -40,6 +40,9 @@ import { createLendingDialogs } from "./lending-dialogs.mjs";
 import { createActivityWindow } from "./lending-activity-window.mjs";
 import { missingPermissions } from "./lent-screen-failures.mjs";
 import { createScreenControl } from "./screen-control.mjs"; import { createAskPrompt } from "./ask-prompt.mjs";
+// productName is the display name NightShift; the packaged profile folder keeps upstream's "OpenMausBot" so stored
+// credentials and settings stay where they were (runtime identifier intentionally kept for Phase 0).
+if (app.isPackaged) app.setPath("userData", path.join(app.getPath("appData"), "OpenMausBot"));
 let startupScreen = null;
 let desktopTray = null;
 import { collisionFreeDownloadPath, defaultSaveName, openFolder, openHtmlCopy, openLogsFolder, revealDownloadWhenDone, revealInFolder, withSavableFile } from "./save-file.mjs";

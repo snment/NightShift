@@ -37,7 +37,7 @@ function onlyOn(shows: (ctx: SettingsContext) => boolean): string | undefined {
 }
 
 function fill(text: string): string {
-  return text.replaceAll("{app}", "MausBot").replaceAll("{place}", "My Cloud");
+  return text.replaceAll("{app}", "NightShift").replaceAll("{place}", "My Cloud");
 }
 
 /** The places, in Settings' own order, with their labels read from `labels` (the English catalog). */

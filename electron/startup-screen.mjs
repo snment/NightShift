@@ -29,7 +29,7 @@ export function createStartupScreen({
     width: 440, height: 300, resizable: false, maximizable: false,
     fullscreenable: false, frame: false, transparent: true,
     backgroundColor: "#00000000", show: false, icon: iconPath,
-    title: "OpenMausBot", autoHideMenuBar: true,
+    title: "NightShift", autoHideMenuBar: true,
     webPreferences: {
       contextIsolation: true, sandbox: true, nodeIntegration: false,
       preload: fileURLToPath(new URL("./startup-screen-preload.cjs", import.meta.url)),

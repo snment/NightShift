@@ -15,8 +15,8 @@ export interface BrandStatus {
 }
 
 export const DEFAULT_BRAND: Brand = { name: "OpenMausBot" };
-/** The product's name wherever a person reads it. OpenMausBot names only the open-source project and its repository. */
-export const PRODUCT_NAME = "MausBot";
+/** The product's name wherever a person reads it. DEFAULT_BRAND's "OpenMausBot" names only the upstream open-source project and stays as-is for Phase 0. */
+export const PRODUCT_NAME = "NightShift";
 
 let current: BrandStatus = { brand: DEFAULT_BRAND, source: "default", file: "" };
 
@@ -24,7 +24,7 @@ export function brand(): Brand {
   return current.brand;
 }
 
-/** The name a person reads: a white-label brand file's own name, else MausBot. `brand().name` stays the project's name. */
+/** The name a person reads: a white-label brand file's own name, else NightShift. `brand().name` stays the project's name. */
 export function productName(): string {
   return current.source === "file" ? current.brand.name : PRODUCT_NAME;
 }

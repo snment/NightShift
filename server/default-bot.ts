@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { writeFileAtomic } from "./atomic.ts";
-import { DEFAULT_BOT_COLOR, DEFAULT_BOT_NAME, defaultBotPerson } from "../shared/default-bot.ts";
+import { DEFAULT_BOT_COLOR, DEFAULT_BOT_NAME, LEGACY_DEFAULT_BOT_NAME, defaultBotPerson } from "../shared/default-bot.ts";
 import { takeImportName } from "../shared/import-name.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
 
@@ -80,7 +80,7 @@ export function forgetDefaultBot(dataDir: string, person: string): void {
 export function seededMausBot(bots: readonly BotRecord[]): BotRecord | undefined {
   const oldest = bots.reduce<BotRecord | undefined>((first, bot) => !first || bot.createdAt < first.createdAt ? bot : first, undefined);
   if (!oldest || oldest.hidden || oldest.movedTo || oldest.section?.trim() || oldest.installedPackage) return undefined;
-  return oldest.name === DEFAULT_BOT_NAME || oldest.color === STARTER_COLOR ? oldest : undefined;
+  return oldest.name === DEFAULT_BOT_NAME || oldest.name === LEGACY_DEFAULT_BOT_NAME || oldest.color === STARTER_COLOR ? oldest : undefined;
 }
 
 /** Puts the intro where its person sees it next: in its open conversation while nobody has written there, else at the
@@ -159,7 +159,7 @@ export function takeArrivingDefaultBot(store: Pick<Store, "bots" | "patchBot" | 
   const kept = keptDefaultBot(store, id);
   if (kept) {
     const from = computer?.trim() || "another computer";
-    const plain = [DEFAULT_BOT_NAME, kept.name].map((name) => name.trim().toLowerCase()).includes(arriving.name.trim().toLowerCase());
+    const plain = [DEFAULT_BOT_NAME, LEGACY_DEFAULT_BOT_NAME, kept.name].map((name) => name.trim().toLowerCase()).includes(arriving.name.trim().toLowerCase());
     store.patchBot(id, { defaultBot: undefined, sidebarHidden: undefined, ...(plain ? { name: `${DEFAULT_BOT_NAME} (from ${from})` } : {}) });
     return;
   }

@@ -163,7 +163,7 @@ that use it.
   that launch and follows it there.
 - **At most one remote card a launch**, and **at most one `sponsor` card in any 7 days** per person (counted from the day
   one was shown).
-- **Never** in the launch whose welcome just finished, over MausBot's first-launch card, during a live call, or while a
+- **Never** in the launch whose welcome just finished, over NightShift's first-launch card, during a live call, or while a
   move to My Cloud is under way (the built-in sponsor card's exclusions).
 - **Never on a branded build** (`brandStatus().source === "file"`), any kind, as the What's new popup.
 - **Sponsor cards** also skip a desktop whose organization's policy limits the AI providers (company models only, or a

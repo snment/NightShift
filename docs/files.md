@@ -55,7 +55,7 @@ Folders shared from the Files page before lent folders keep working. Once this c
 - **Folders that are never shared:**
   - the home folder or anything above it;
   - a drive root or a mount point;
-  - MausBot's own folders: its data folder and `Documents/MausBot`;
+  - NightShift's own folders: its data folder and `Documents/MausBot`;
   - folders of keys and settings: `.ssh`, `.aws`, `.gnupg`, `.config`, `Library`, `AppData` and similar;
   - a folder inside, or around, one already shared.
 - **This computer's version always wins.** A file new or changed here is uploaded. If a bot edits the copy anyway, the next pass puts this computer's version back, and the bot's version stays in My Cloud's trash. Files a bot adds to the copy stay on My Cloud and never come down.

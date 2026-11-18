@@ -1,6 +1,6 @@
 # Terminal setup
 
-Install [Node.js](https://nodejs.org/) 24 or newer, then choose either way to run OpenMausBot:
+Install [Node.js](https://nodejs.org/) 24 or newer, then choose either way to run NightShift:
 
 ```sh
 # Install once, then use the short command:
@@ -14,7 +14,7 @@ Or, without a global install:
 npx openmausbot
 ```
 
-Use the same command next time. The first launch guides you through setup; later launches reuse your saved AI connection and phone-access choice. `openmausbot start` is the same as the bare command. If that workspace is already running, OpenMausBot opens it instead of starting a second server.
+Use the same command next time. The first launch guides you through setup; later launches reuse your saved AI connection and phone-access choice. `openmausbot start` is the same as the bare command. If that workspace is already running, NightShift opens it instead of starting a second server.
 
 ## First launch
 
@@ -37,14 +37,14 @@ A phone cannot connect to this computer's `localhost` address. The harness also 
 
 Choose one connection method:
 
-- **Managed HTTPS address:** setup asks explicit permission for a public endpoint through Cloudflare and a possible connector download. Device pairing protects chat and settings; the pairing page and basic server identity remain publicly reachable. Sign in to an **OpenMausBot account** using an emailed code, or reuse this machine's saved account. This account is separate from ChatGPT, Claude, or an API-provider account. The connection stays active while OpenMausBot runs.
+- **Managed HTTPS address:** setup asks explicit permission for a public endpoint through Cloudflare and a possible connector download. Device pairing protects chat and settings; the pairing page and basic server identity remain publicly reachable. Sign in to an **OpenMausBot account** using an emailed code, or reuse this machine's saved account. This account is separate from ChatGPT, Claude, or an API-provider account. The connection stays active while NightShift runs.
 - **Existing Tailscale:** both computer and phone must already be signed in to the same tailnet, with HTTPS certificates enabled. Setup asks before enabling HTTPS serving to that tailnet; it does not install or sign in to Tailscale for you.
 - **Existing HTTPS address (advanced):** supply the origin of a reverse proxy you already configured, such as `https://maus.example.com`. Do not paste a password, path, query, or pairing code. Entering an address does not create the proxy or open a LAN listener.
 
 After the connection is ready:
 
-- **iPhone/iPad:** scan the QR with Camera to open Safari. If you already have the OpenMausBot iOS app, use its pairing scanner or paste the full link there.
-- **Android:** the QR is an app link, so scan it inside the OpenMausBot app. To use a browser instead, open the web address printed above it and type the code.
+- **iPhone/iPad:** scan the QR with Camera to open Safari. If you already have the NightShift iOS app, use its pairing scanner or paste the full link there.
+- **Android:** the QR is an app link, so scan it inside the NightShift app. To use a browser instead, open the web address printed above it and type the code.
 
 Choose **Connect** on the phone. Scanning alone is not a successful pairing. The code is private, single-use, and works for 10 minutes. Guided phone pairing grants client access for chat and approvals, not settings or pairing administration.
 

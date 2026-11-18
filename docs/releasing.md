@@ -161,7 +161,7 @@ must fail the build, not ship an installer that downloads them on first use.
 
 ## One-time setup: release secrets
 
-Set these in **OpenMausBot → Settings → Secrets and variables → Actions**.
+Set these in **NightShift → Settings → Secrets and variables → Actions**.
 
 The **Prepare next release** workflow also needs
 **Settings → Actions → General → Workflow permissions → Allow GitHub Actions

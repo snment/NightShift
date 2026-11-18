@@ -1,5 +1,7 @@
 appId: com.openmausbot.app
-productName: OpenMausBot
+# Display name only. appId, artifact names, executableName, URL scheme and helper bundle paths keep upstream's
+# runtime identifiers for Phase 0; electron/main.mjs keeps the packaged profile folder.
+productName: NightShift
 artifactName: OpenMausBot-${version}-${arch}.${ext}
 
 protocols:
@@ -133,14 +135,14 @@ mac:
     - from: dist-native/duckdb/darwin-${arch}/node_modules
       to: duckdb/node_modules
   extendInfo:
-    NSMicrophoneUsageDescription: OpenMausBot uses the microphone for voice dictation into the composer.
-    NSSpeechRecognitionUsageDescription: OpenMausBot transcribes your voice on-device to type messages for you.
-    NSAccessibilityUsageDescription: OpenMausBot uses Accessibility when you let a bot control this Mac.
-    NSLocalNetworkUsageDescription: OpenMausBot connects to your phones and your other computers on this network and on Tailscale.
+    NSMicrophoneUsageDescription: NightShift uses the microphone for voice dictation into the composer.
+    NSSpeechRecognitionUsageDescription: NightShift transcribes your voice on-device to type messages for you.
+    NSAccessibilityUsageDescription: NightShift uses Accessibility when you let a bot control this Mac.
+    NSLocalNetworkUsageDescription: NightShift connects to your phones and your other computers on this network and on Tailscale.
     NSBonjourServices:
       - _openmausbot._tcp
-    NSScreenCaptureUsageDescription: OpenMausBot uses Screen Recording so bots can see this Mac before acting.
-    NSDownloadsFolderUsageDescription: OpenMausBot looks in Downloads for the file your Grok Bot saved when you move it here.
+    NSScreenCaptureUsageDescription: NightShift uses Screen Recording so bots can see this Mac before acting.
+    NSDownloadsFolderUsageDescription: NightShift looks in Downloads for the file your Grok Bot saved when you move it here.
   # Notarization runs manually after the build (notarytool + staple),
   # mirroring the BlueyLite ship_release.sh flow.
   notarize: false
@@ -197,7 +199,7 @@ win:
 nsis:
   oneClick: true
   perMachine: false
-  shortcutName: OpenMausBot
+  shortcutName: NightShift
   # Versioned, like the .dmg. The README's /latest/download/ button needs a
   # STABLE filename, so ship a second copy named OpenMausBot-setup.exe on the
   # release — the same trick as OpenMausBot.dmg beside OpenMausBot-${version}.dmg.
@@ -234,7 +236,7 @@ linux:
       to: openmausbot-browser.apparmor
   desktop:
     entry:
-      Name: OpenMausBot
+      Name: NightShift
       Comment: Your own team of AI bots, in a chat app
       Keywords: AI;Agents;Chat;Productivity;
 
