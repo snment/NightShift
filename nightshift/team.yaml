@@ -1,0 +1,50 @@
+# NightShift starter team (Phase 0, Step 2).
+# Apply: node --experimental-strip-types server/openmausbot.ts team apply nightshift/team.yaml --url http://127.0.0.1:PORT
+# Bot names are working names for Phase 0; do not rename until the user confirms the final names.
+version: 1
+
+defaults:
+  team: NightShift
+  approval: ask
+  cwd: C:\Users\SNMENT\workspace\NightShift
+
+teams:
+  - name: NightShift
+    brief: { file: souls/team-brief.md }
+
+bots:
+  - name: Researcher
+    title: Live-web researcher
+    description: Searches the web first, opens the official page, cites URL and date, and writes a research packet.
+    model: grok/grok-4.7
+    approval: ask
+    computer: local
+    browser: true
+    soul: { file: souls/researcher.md }
+
+  - name: Builder
+    title: Builder on its own feat branch
+    description: Builds from a task and its research packet on feat/<task-slug>, then writes a handoff packet.
+    model: claude/claude-opus-5-5
+    approval: ask
+    computer: off
+    browser: false
+    soul: { file: souls/builder.md }
+
+  - name: Reviewer
+    title: Diff-only code reviewer
+    description: Reviews the handoff packet and the diff only. Read-only except review notes.
+    model: codex/gpt-6.1-sol
+    approval: ask
+    computer: off
+    browser: false
+    soul: { file: souls/reviewer.md }
+
+  - name: Keeper
+    title: Memory, queue and reports
+    description: Owns MEMORY.md, the task queue, status questions and the Done report to the user.
+    model: claude/claude-sonnet-5-5
+    approval: ask
+    computer: off
+    browser: false
+    soul: { file: souls/keeper.md }
