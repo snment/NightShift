@@ -5,7 +5,7 @@ import { diffGate, diffSha256, type TaskGit } from "./git.ts";
 import { handoffPathFor, validateHandoff, validateResearch } from "./handoff.ts";
 import {
   DIFF_ACTIONS, MAX_REVIEW_ROUNDS, REVIEW_ROLES, routingTag, withTag, isWorkTaskStatus,
-  type DiffAction, type DiffApproval, type ReviewRole, type UsageRole, type WorkTask,
+  type DiffAction, type DiffApproval, type ReviewRole, type RoleUsage, type TurnUsage, type UsageRole, type WorkTask,
 } from "./model.ts";
 import type { NewWorkTask, WorkTaskStore } from "./store.ts";
 
@@ -77,8 +77,18 @@ function snapshot(task: WorkTask): TaskAuditEvent["task"] {
   return { id, slug, title, status, tags: [...tags], owner_bot_id, review_round, branch };
 }
 
+const USAGE_ROLES: readonly UsageRole[] = ["researcher", "builder", "reviewer"];
+
+const isUsageRole = (role: ReviewRole): role is UsageRole => (USAGE_ROLES as readonly string[]).includes(role);
+
+const count = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0);
+
 export class ReviewLoop {
   private readonly deps: ReviewLoopDeps;
+  /** The task and role each bot was last handed. The turn that ends with the bot's own transition is booked after
+   * the task has moved on, so it still counts here once. Kept in memory: after a restart, a bot that still owns a
+   * task is found from the task list instead. */
+  private readonly turnOwners = new Map<string, { taskId: string; role: UsageRole }>();
 
   constructor(deps: ReviewLoopDeps) {
     this.deps = deps;
@@ -335,18 +345,66 @@ export class ReviewLoop {
       t.owner_bot_id = botId;
     }, null);
     this.audit("task.reassigned", next, actor, { from: task.owner_bot_id, to: botId, role: role ?? null });
-    if (role) this.deps.dispatch?.(role, botId, next, this.promptFor(role, next));
+    if (role) this.handOver(role, botId, next, this.promptFor(role, next));
     return next;
   }
 
+  /** Books one turn from the usage ledger on the task its bot is working on, or returns null when the bot is on no
+   * task or the engine reported no tokens. */
+  noteTurnUsage(turn: TurnUsage): WorkTask | null {
+    const owner = this.turnOwnerOf(turn.botId);
+    if (!owner) return null;
+    const task = this.deps.store.get(owner.taskId);
+    if (!task) {
+      this.turnOwners.delete(turn.botId);
+      return null;
+    }
+    if (task.owner_bot_id !== turn.botId) this.turnOwners.delete(turn.botId);
+    const usage: RoleUsage = {
+      inputTokens: count(turn.input), outputTokens: count(turn.output),
+      cachedInputTokens: count(turn.cachedInput), cacheWriteTokens: count(turn.cacheWrite), reasoningTokens: count(turn.reasoning),
+    };
+    if (usage.inputTokens + usage.outputTokens + usage.cachedInputTokens! + usage.cacheWriteTokens! === 0) return null;
+    return this.addUsage(task, owner.role, usage, { kind: "bot", id: turn.botId }, {
+      source: "ledger", ...(turn.model ? { model: turn.model } : {}), ...(turn.driverKind ? { engine: turn.driverKind } : {}),
+      ...(turn.turnId ? { turnId: turn.turnId } : {}), ...(turn.threadId ? { threadId: turn.threadId } : {}),
+    }, turn.model);
+  }
+
+  private turnOwnerOf(botId: string): { taskId: string; role: UsageRole } | null {
+    const known = this.turnOwners.get(botId);
+    if (known) return known;
+    const roles = this.deps.roles();
+    const role = USAGE_ROLES.find((one) => roles[one] === botId);
+    const task = role ? this.deps.store.list().find((one) => one.owner_bot_id === botId) : undefined;
+    return role && task ? { taskId: task.id, role } : null;
+  }
+
   private recordUsage(task: WorkTask, role: UsageRole, input: number, output: number, actor: LoopActor): WorkTask {
-    if (!["researcher", "builder", "reviewer"].includes(role)) throw new LoopError(400, "role must be researcher, builder or reviewer");
+    if (!USAGE_ROLES.includes(role)) throw new LoopError(400, "role must be researcher, builder or reviewer");
     if (![input, output].every((n) => Number.isInteger(n) && n >= 0)) throw new LoopError(400, "token counts must be whole numbers, 0 or more");
+    return this.addUsage(task, role, { inputTokens: input, outputTokens: output }, actor, { source: "manual" });
+  }
+
+  private addUsage(task: WorkTask, role: UsageRole, usage: RoleUsage, actor: LoopActor, detail: Record<string, unknown>, model?: string): WorkTask {
     const next = this.update(task, (t) => {
       const prior = t.token_usage[role] ?? { inputTokens: 0, outputTokens: 0 };
-      t.token_usage[role] = { inputTokens: prior.inputTokens + input, outputTokens: prior.outputTokens + output };
+      const sum: RoleUsage = { inputTokens: prior.inputTokens + usage.inputTokens, outputTokens: prior.outputTokens + usage.outputTokens };
+      for (const key of ["cachedInputTokens", "cacheWriteTokens", "reasoningTokens"] as const) {
+        const total = (prior[key] ?? 0) + (usage[key] ?? 0);
+        if (total > 0) sum[key] = total;
+      }
+      if (detail.source === "ledger" || prior.turns !== undefined) sum.turns = (prior.turns ?? 0) + (detail.source === "ledger" ? 1 : 0);
+      const models = [...new Set([...(prior.models ?? []), ...(model ? [model] : [])])];
+      if (models.length) sum.models = models;
+      t.token_usage[role] = sum;
     }, null);
-    this.audit("task.usage", next, actor, { role, inputTokens: input, outputTokens: output, total: next.token_usage[role] });
+    const { cachedInputTokens, cacheWriteTokens, reasoningTokens } = usage;
+    this.audit("task.usage", next, actor, {
+      role, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens,
+      ...(cachedInputTokens ? { cachedInputTokens } : {}), ...(cacheWriteTokens ? { cacheWriteTokens } : {}), ...(reasoningTokens ? { reasoningTokens } : {}),
+      ...detail, total: next.token_usage[role],
+    });
     return next;
   }
 
@@ -400,8 +458,13 @@ export class ReviewLoop {
       if (t.status === "To Do") t.status = "Working";
     }, null);
     this.audit("task.assigned", next, SYSTEM, { role, botId });
-    this.deps.dispatch?.(role, botId, next, this.promptFor(role, next, reviewedBefore));
+    this.handOver(role, botId, next, this.promptFor(role, next, reviewedBefore));
     return next;
+  }
+
+  private handOver(role: ReviewRole, botId: string, task: WorkTask, prompt: string): void {
+    if (isUsageRole(role)) this.turnOwners.set(botId, { taskId: task.id, role });
+    this.deps.dispatch?.(role, botId, task, prompt);
   }
 
   private flagSplit(task: WorkTask, reason: string, stat: { files: number; lines: number }, actor: LoopActor): WorkTask {

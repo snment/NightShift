@@ -68,7 +68,26 @@ Every event is written to the admin activity log (`<data>/admin-activity/`)
 with category `task`. The events are: created, assigned, branch-created,
 research-written, handoff-written, review-started, review-approved,
 review-changes, review-cap, split-flagged, blocked, resumed, reassigned, usage
-(tokens per role), diff-approval-requested, diff-approval-decided, deleted.
+(tokens per role, from the usage ledger or a manual transition), diff-approval-requested, diff-approval-decided, deleted.
+
+## Token usage
+
+Every turn the usage ledger books (`<data>/usage/`) is also booked on the task
+its bot is working on, as `token_usage.<role>` and a `task.usage` audit event
+with `source: "ledger"`. The role's counts add up `inputTokens`,
+`outputTokens`, and, when the engine reports them, `cachedInputTokens`,
+`cacheWriteTokens` and `reasoningTokens`, with `turns` and the `models` used.
+
+- A bot's turns count for the task and role the loop last handed it, including
+  the turn that ends with its own transition. After that, its turns count for
+  nothing until it is handed a task again.
+- Only turns in the bot's own chat count: that is where the loop hands it its
+  turns.
+- A turn whose engine reported no tokens books nothing.
+- After a restart, a bot that still owns a task books on that task.
+
+The manual `usage` transition still adds to the same counts, with
+`source: "manual"`.
 
 ## Driving it
 
@@ -101,7 +120,7 @@ the approval path a bot's shell cannot answer for the person.
 
 `server/review-loop/*.test.ts` cover the store, the routing, the 3-round cap,
 the handoff validator, the diff gate, worktree isolation, diff approval, the
-audit events and the HTTP routes.
+audit events, token usage from the ledger and the HTTP routes.
 
 On a verification fixture (`scripts/control-omb.ts launch`), the server's PATH
 holds only `node`. To let the loop run git there, set `NIGHTSHIFT_GIT` to an

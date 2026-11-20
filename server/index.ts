@@ -648,7 +648,7 @@ import { createThreadRoutes } from "./routes/threads.ts";
 import { createWebhookRoutes } from "./routes/webhooks.ts";
 import { withScopeHint } from "./connector-scope-hint.ts";
 import { connectorFileDeps, connectorFileScope, prepareConnectorFiles, withMissingFileHint } from "./connector-files.ts";
-import { createConnectorCards } from "./host/connector-cards.ts"; import { createNightShiftLoop } from "./review-loop/host.ts"; import { createWorkTaskRoutes } from "./review-loop/routes.ts";
+import { createConnectorCards } from "./host/connector-cards.ts"; import { bookTaskTurnUsage, createNightShiftLoop } from "./review-loop/host.ts"; import { createWorkTaskRoutes } from "./review-loop/routes.ts";
 import { createLoginMailCodes } from "./host/login-mail-codes.ts";
 import { onThreadSeen, personAsks as personAskAt, sawThread } from "./thread-presence.ts"; import { createWarmSummaryHost, HARNESS_IDLE_FRACTION } from "./host/warm-summary-host.ts";
 
@@ -1351,11 +1351,13 @@ function operatorPrices(): PriceList | null {
   return entitled("billing") && cfg.billing?.prices && Object.keys(cfg.billing.prices).length ? cfg.billing.prices : null;
 }
 
+let bookReviewLoopTurn: (row: UsageRow) => void = () => undefined;
 const attributeUsage = createUsageAttribution({ section: (botId) => store.bot(botId)?.section, threadTrigger: (threadId) => turnTriggers.get(threadId), routineWriter: (id) => { const key = cloudRoutineAuthors?.writer(id); return key ? teamOwners.people?.list().find((one) => personKey({ id: "", email: one.email }) === key)?.email : undefined; } }); const usageCapGate = createUsageCapGate({ dataDir: DATA_DIR, caps: () => cfg.usageCaps, botName: (botId) => store.bot(botId)?.name, language: () => appLanguage(), log: (line) => console.log(line), notice: (aboutBotId, title, body) => { const bot = store.bot(aboutBotId ?? "") ?? store.bots[0]; if (bot) broadcast({ kind: "notify", notification: logNotification(buildSpendNotification({ id: bot.id, name: bot.name }, bot.threadId, { title, body })) }, { adminOnly: true }); } }); const threadStanding = (botId: string, threadId: string): ThreadStanding => { const owner = directRequestOwners.get(threadId); return { unattended: isUnattended(botId, threadId), automation: owner?.automation, origin: owner?.origin?.kind }; }; const routineTriggerOf = (threadId: string) => { const run = activeRoutineRunForThread(threadId); return run ? run.triggerSource ?? (run.manual ? "manual" : "schedule") : undefined; }; function bookTurnUsage(row: Omit<UsageRow, "at" | "costSource">, tokensReported = true, notificationThreadId = row.threadId): void {
   const cost = tokensReported || row.costUsd !== null ? ledgerCost(row, operatorPrices()) : { costUsd: null };
   const booked = attributeUsage({ ...row, ...cost, ...usageTrace.settle(row.threadId), at: new Date().toISOString() });
   // The append is async; noteSpend counts the row from memory until it lands, so the cap check sees it.
   noteSpend(DATA_DIR, booked, appendUsage(DATA_DIR, booked));
+  bookReviewLoopTurn(booked);
   const state = spendState(cfg, DATA_DIR);
   const alert = takeSpendAlert(DATA_DIR, state);
   if (alert && state) {
@@ -12052,7 +12054,7 @@ ROUTES.push(createBotMessageRoutes({
   goals: oneOnOneGoals, inboxReply: teamMessages.replyIn, typedCardAnswer: askCards.typed, ...(CLOUD_TEAM ? { teamAiOwnerName: () => teamAiOwner(teamOwners.people?.list() ?? [], teamHost.personName)?.name ?? "" } : {}),
   relayedReaction: (threadId, messageId, person, emoji) => void store.setReaction(threadId, messageId, relayedPersonKey(person),
     { emoji, name: person.name ?? person.email, at: Date.now() }),
-})); const reviewLoop = createNightShiftLoop({ dataDir: DATA_DIR, store, audit: (row) => appendAdminAction(DATA_DIR, row), decide: (row) => appendDecision(DATA_DIR, row), send: (botId, threadId, text) => acceptDirectSend({ botId, threadId, text, trigger: { kind: "bot" }, personPresent: false }) }); ROUTES.push(createWorkTaskRoutes({ loop: reviewLoop, botExists: (id) => Boolean(store.bot(id)), person: (auth) => (auth.kind === "session" ? auth.session.email ?? auth.session.label : "loopback") }));
+})); const reviewLoop = createNightShiftLoop({ dataDir: DATA_DIR, store, audit: (row) => appendAdminAction(DATA_DIR, row), decide: (row) => appendDecision(DATA_DIR, row), send: (botId, threadId, text) => acceptDirectSend({ botId, threadId, text, trigger: { kind: "bot" }, personPresent: false }) }); ROUTES.push(createWorkTaskRoutes({ loop: reviewLoop, botExists: (id) => Boolean(store.bot(id)), person: (auth) => (auth.kind === "session" ? auth.session.email ?? auth.session.label : "loopback") })); bookReviewLoopTurn = (row) => { bookTaskTurnUsage(reviewLoop, store, row); };
 const liveRoots = (threadId: string, botId: string | undefined) => { const bot = botId ? store.bot(botId) : store.botByThread(threadId); return bot ? messageFileRootsForThread(bot.id, threadId).filter((root) => root !== ATTACHMENTS_DIR) : null; }; const chatApps = createChatApps({ store, dataDir: DATA_DIR, liveRows: liveAppRows, liveRoots, paused: () => workspaceMaintenance.active || moveFreeze.frozen() });
 const chatAppsMcp = createChatAppsMcp({ store, apps: chatApps, dataDir: DATA_DIR, keys: mcpKeys, storedServers: () => cfg.mcpServers ?? {}, mountedServers: (bot) => teamConnections.engineMcp(bot), personMcp: teamConnections.personMcp, probeAs: (server) => mcpServersHost.probeAs(server), oauth: mcpOAuth });
 ROUTES.push(createChatAppRoutes({ store, apps: chatApps, threadRefusal: cloudThreadRefusal, mcpRpc: chatAppsMcp.rpc, threadVisible: (auth, threadId) => (auth.kind !== "session" || sessions.isLive(auth.session.id)) && visibleTo(viewerFor(auth)).thread(threadId) }));

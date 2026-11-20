@@ -7,7 +7,7 @@ import type { MausColor, Message, OptionCardData } from "../store.ts";
 import { taskAuditRow } from "./audit.ts";
 import { localGit, type TaskGit } from "./git.ts";
 import { ReviewLoop } from "./loop.ts";
-import type { DiffApproval, ReviewRole, WorkTask } from "./model.ts";
+import type { DiffApproval, ReviewRole, TurnUsage, WorkTask } from "./model.ts";
 import { WorkTaskStore } from "./store.ts";
 
 export const WORK_TASKS_FILE = "work-tasks.json";
@@ -105,4 +105,17 @@ export function createNightShiftLoop(deps: NightShiftLoopDeps): ReviewLoop {
       return threadId;
     },
   });
+}
+
+/** Books a turn from the usage ledger on the task its bot works on. Only turns in the bot's own chat count: that is
+ * where the loop hands it its turns. Never throws, so the ledger's bookkeeping never fails a turn. */
+export function bookTaskTurnUsage(loop: ReviewLoop, store: Pick<LoopStore, "bot">, turn: TurnUsage): WorkTask | null {
+  try {
+    const bot = store.bot(turn.botId);
+    if (!bot || (turn.threadId !== undefined && turn.threadId !== bot.threadId)) return null;
+    return loop.noteTurnUsage(turn);
+  } catch (error) {
+    console.warn(`[review-loop] could not book a turn's tokens on its task: ${error instanceof Error ? error.message : String(error)}`);
+    return null;
+  }
 }

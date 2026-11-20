@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { removeTempDir } from "../testing/cleanup.ts";
 import type { DiffStat, TaskGit } from "./git.ts";
-import { createNightShiftLoop, DIFF_APPROVAL_TOOL, type LoopStore } from "./host.ts";
+import { appendUsage, flushUsageLedger, readUsage, type UsageRow } from "../usage-ledger.ts";
+import { bookTaskTurnUsage, createNightShiftLoop, DIFF_APPROVAL_TOOL, type LoopStore } from "./host.ts";
 
 let root: string;
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), "nightshift-host-")); });
@@ -59,6 +60,35 @@ describe("createNightShiftLoop", () => {
     expect(card.message.text).toContain("+exact");
     expect(card.message.card).toMatchObject({ requestId: asked.approvals[0]!.request_id, tool: DIFF_APPROVAL_TOOL });
     expect(decisions[0]).toMatchObject({ decision: "card-shown", tool: DIFF_APPROVAL_TOOL, threadId: "t-room" });
+  });
+
+  it("books a ledger row on the task its bot works on, only for turns in the bot's own chat", async () => {
+    const { store } = fakeStore();
+    const audit: Array<{ action: string; after?: Record<string, unknown> }> = [];
+    const loop = createNightShiftLoop({ dataDir: root, store, git: fakeGit(), audit: (row) => audit.push(row),
+      decide: () => undefined, send: async () => undefined });
+    const task = loop.create({ title: "Docs", project: root, tags: ["research"], created_by: "loopback" }, { kind: "person", id: "loopback" });
+    const row: Omit<UsageRow, "at"> = { botId: "id-Researcher", botName: "Researcher", threadId: "t-Researcher", instanceId: "claude",
+      driverKind: "claudeAgent", model: "claude-opus-5-5", input: 1234, output: 321, cachedInput: 9000, cacheWrite: 77,
+      costUsd: null, trigger: { kind: "bot" }, turnId: "turn-1" };
+    expect(await appendUsage(root, row)).toBe(true);
+    await flushUsageLedger(root);
+    const [booked] = readUsage(root, { from: new Date(Date.now() - 60_000), to: new Date(Date.now() + 60_000) });
+    expect(bookTaskTurnUsage(loop, store, { ...booked!, threadId: "t-room" })).toBeNull();
+    expect(bookTaskTurnUsage(loop, store, { ...booked!, botId: "id-unknown" })).toBeNull();
+    const after = bookTaskTurnUsage(loop, store, booked!)!;
+    expect(after.id).toBe(task.id);
+    expect(after.token_usage.researcher).toEqual({ inputTokens: 1234, outputTokens: 321, cachedInputTokens: 9000, cacheWriteTokens: 77, turns: 1, models: ["claude-opus-5-5"] });
+    const usage = audit.find((one) => one.action === "task.usage")!;
+    expect(usage.after).toMatchObject({ by: "bot:id-Researcher", role: "researcher", source: "ledger", inputTokens: 1234, outputTokens: 321,
+      engine: "claudeAgent", model: "claude-opus-5-5", turnId: "turn-1" });
+    expect(loop.get(task.id).token_usage.researcher!.inputTokens).toBe(1234);
+  });
+
+  it("never lets a failing loop fail the ledger's booking", () => {
+    const { store } = fakeStore();
+    const broken = { noteTurnUsage: () => { throw new Error("disk full"); } } as never;
+    expect(bookTaskTurnUsage(broken, store, { botId: "id-Builder", threadId: "t-Builder", input: 1, output: 1 })).toBeNull();
   });
 
   it("keeps an unreadable task file aside and starts empty", () => {

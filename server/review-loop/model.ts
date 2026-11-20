@@ -12,7 +12,31 @@ export const MAX_REVIEW_ROUNDS = 3;
 export const MAX_DIFF_LINES = 400;
 export const MAX_DIFF_FILES = 10;
 
-export interface RoleUsage { inputTokens: number; outputTokens: number }
+/** Tokens a role spent on a task. The optional fields come from the usage ledger's booked turns; a manual `usage`
+ * transition sets only input and output. */
+export interface RoleUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cachedInputTokens?: number;
+  cacheWriteTokens?: number;
+  reasoningTokens?: number;
+  turns?: number;
+  models?: string[];
+}
+
+/** One turn as the usage ledger booked it (a subset of `UsageRow`). */
+export interface TurnUsage {
+  botId: string;
+  threadId?: string;
+  model?: string;
+  driverKind?: string;
+  turnId?: string;
+  input: number;
+  output: number;
+  cachedInput?: number;
+  cacheWrite?: number;
+  reasoning?: number;
+}
 
 export type DiffAction = "push" | "merge" | "pr" | "deploy";
 export const DIFF_ACTIONS: readonly DiffAction[] = ["push", "merge", "pr", "deploy"];

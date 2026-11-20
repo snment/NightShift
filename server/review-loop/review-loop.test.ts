@@ -249,6 +249,74 @@ describe("status and tag routing", () => {
   });
 });
 
+describe("token usage from the usage ledger", () => {
+  const turn = (role: keyof typeof ROLES, input: number, output: number, extra: Record<string, unknown> = {}) =>
+    ({ botId: ROLES[role], model: `${role}-model`, driverKind: `${role}-engine`, input, output, ...extra });
+
+  it("books each role's turns on the task it was handed, including the turn that ends with its transition", () => {
+    const h = harness();
+    let task = newTask(h);
+    h.loop.noteTurnUsage(turn("researcher", 900, 120, { cachedInput: 4000, turnId: "turn-r1" }));
+    task = researchDone(h, task);
+    expect(task.owner_bot_id).toBe(ROLES.builder);
+    h.loop.noteTurnUsage(turn("researcher", 100, 30));
+    expect(h.loop.noteTurnUsage(turn("researcher", 5, 5))).toBeNull();
+    h.loop.noteTurnUsage(turn("builder", 2000, 600, { cacheWrite: 300, reasoning: 50 }));
+    task = build(h, task);
+    h.loop.noteTurnUsage(turn("builder", 10, 4));
+    h.loop.noteTurnUsage(turn("reviewer", 700, 90));
+    task = h.loop.transition(task.id, { event: "review.approve" }, bot("reviewer"));
+    task = h.loop.noteTurnUsage(turn("reviewer", 50, 10))!;
+    expect(task.token_usage).toEqual({
+      researcher: { inputTokens: 1000, outputTokens: 150, cachedInputTokens: 4000, turns: 2, models: ["researcher-model"] },
+      builder: { inputTokens: 2010, outputTokens: 604, cacheWriteTokens: 300, reasoningTokens: 50, turns: 2, models: ["builder-model"] },
+      reviewer: { inputTokens: 750, outputTokens: 100, turns: 2, models: ["reviewer-model"] },
+    });
+    const first = h.audit.find((event) => event.action === "task.usage")!;
+    expect(first).toMatchObject({ actor: bot("researcher"), detail: {
+      role: "researcher", source: "ledger", inputTokens: 900, outputTokens: 120, cachedInputTokens: 4000,
+      model: "researcher-model", engine: "researcher-engine", turnId: "turn-r1",
+    } });
+    expect(h.audit.filter((event) => event.action === "task.usage")).toHaveLength(6);
+  });
+
+  it("books nothing for a bot on no task, a keeper, or a turn with no reported tokens", () => {
+    const h = harness();
+    expect(h.loop.noteTurnUsage(turn("builder", 10, 10))).toBeNull();
+    const task = newTask(h, ["dev"]);
+    expect(h.loop.noteTurnUsage(turn("keeper", 10, 10))).toBeNull();
+    expect(h.loop.noteTurnUsage(turn("builder", 0, 0))).toBeNull();
+    expect(h.loop.get(task.id).token_usage).toEqual({});
+    expect(h.audit.some((event) => event.action === "task.usage")).toBe(false);
+  });
+
+  it("after a restart, finds the task a bot still owns", () => {
+    const h = harness();
+    const task = newTask(h, ["dev"]);
+    const restarted = harness();
+    expect(restarted.loop.noteTurnUsage(turn("builder", 40, 8))!.token_usage.builder).toEqual({ inputTokens: 40, outputTokens: 8, turns: 1, models: ["builder-model"] });
+    expect(restarted.loop.get(task.id).id).toBe(task.id);
+  });
+
+  it("adds to manual counts and marks their source", () => {
+    const h = harness();
+    const task = newTask(h, ["dev"]);
+    h.loop.transition(task.id, { event: "usage", role: "builder", input_tokens: 100, output_tokens: 20 }, PERSON);
+    const after = h.loop.noteTurnUsage(turn("builder", 5, 1))!;
+    expect(after.token_usage.builder).toEqual({ inputTokens: 105, outputTokens: 21, turns: 1, models: ["builder-model"] });
+    expect(h.audit.filter((event) => event.action === "task.usage").map((event) => event.detail?.source)).toEqual(["manual", "ledger"]);
+  });
+
+  it("books a builder's second round on the same task after review asks for changes", () => {
+    const h = harness();
+    let task = build(h, newTask(h, ["dev"]));
+    h.loop.transition(task.id, { event: "review.changes", notes: "docs/note.md:1 say more" }, bot("reviewer"));
+    task = h.loop.noteTurnUsage(turn("builder", 30, 3))!;
+    expect(task.status).toBe("Working");
+    expect(task.token_usage.builder).toMatchObject({ inputTokens: 30, outputTokens: 3 });
+  });
+});
+
 describe("handoff and research packets", () => {
   it("accepts a packet with every section", () => {
     expect(validateHandoff(HANDOFF("x"))).toEqual({ ok: true, problems: [] });
