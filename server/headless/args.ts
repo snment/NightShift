@@ -110,6 +110,26 @@ const VERBS: Record<string, { options: ParseArgsOptionsConfig; positionals: numb
   "token create": { options: { out: { type: "string" }, scope: { type: "string" }, expires: { type: "string" }, force: { type: "boolean" } }, positionals: 1 },
   "token list": { options: {}, positionals: 0 },
   "token revoke": { options: {}, positionals: 1 },
+  tasks: { options: {}, positionals: 0 },
+  "task create": {
+    options: { project: { type: "string" }, description: { type: "string" }, slug: { type: "string" }, room: { type: "string" },
+      base: { type: "string" }, tags: { type: "string" }, "as-bot": { type: "string" } },
+    positionals: 1,
+  },
+  "task show": { options: {}, positionals: 1 },
+  "task update": {
+    options: { status: { type: "string" }, title: { type: "string" }, description: { type: "string" }, room: { type: "string" },
+      tags: { type: "string" }, "allow-large-diff": { type: "boolean" }, "as-bot": { type: "string" } },
+    positionals: 1,
+  },
+  "task transition": {
+    options: { "research-path": { type: "string" }, "handoff-path": { type: "string" }, notes: { type: "string" }, reason: { type: "string" },
+      bot: { type: "string" }, role: { type: "string" }, "reset-rounds": { type: "boolean" }, "input-tokens": { type: "string" },
+      "output-tokens": { type: "string" }, "as-bot": { type: "string" } },
+    positionals: 2,
+  },
+  "task request-approval": { options: { action: { type: "string" }, "as-bot": { type: "string" } }, positionals: 1 },
+  "task approve-diff": { options: { request: { type: "string" }, sha256: { type: "string" }, approve: { type: "boolean" }, deny: { type: "boolean" } }, positionals: 1 },
 };
 
 export const HEADLESS_VERBS: ReadonlySet<string> = new Set(Object.keys(VERBS).map((verb) => verb.split(" ")[0]!));
@@ -117,6 +137,7 @@ export const HEADLESS_VERBS: ReadonlySet<string> = new Set(Object.keys(VERBS).ma
 /** Verbs that change something; control-omb refuses them on a discovered server. */
 export const MUTATING_VERBS: ReadonlySet<string> = new Set([
   "send", "send-channel", "run", "interrupt", "new-bot", "new-channel", "set-model", "edit", "team apply", "engine set", "token create", "token revoke",
+  "task create", "task update", "task transition", "task request-approval", "task approve-diff",
 ]);
 
 export type Flags = Record<string, string | boolean | string[] | undefined>;
@@ -127,7 +148,7 @@ export interface ParsedCommand {
   positionals: string[];
 }
 
-const SUBCOMMANDS = new Map([["team", ["apply", "export"]], ["engine", ["set", "list"]], ["token", ["create", "list", "revoke"]]]);
+const SUBCOMMANDS = new Map([["team", ["apply", "export"]], ["engine", ["set", "list"]], ["token", ["create", "list", "revoke"]], ["task", ["create", "show", "update", "transition", "request-approval", "approve-diff"]]]);
 
 /** Strict: an unknown flag or a missing value is a usage error (exit 2). */
 export function parseCommand(argv: readonly string[]): ParsedCommand {

@@ -648,7 +648,7 @@ import { createThreadRoutes } from "./routes/threads.ts";
 import { createWebhookRoutes } from "./routes/webhooks.ts";
 import { withScopeHint } from "./connector-scope-hint.ts";
 import { connectorFileDeps, connectorFileScope, prepareConnectorFiles, withMissingFileHint } from "./connector-files.ts";
-import { createConnectorCards } from "./host/connector-cards.ts";
+import { createConnectorCards } from "./host/connector-cards.ts"; import { createNightShiftLoop } from "./review-loop/host.ts"; import { createWorkTaskRoutes } from "./review-loop/routes.ts";
 import { createLoginMailCodes } from "./host/login-mail-codes.ts";
 import { onThreadSeen, personAsks as personAskAt, sawThread } from "./thread-presence.ts"; import { createWarmSummaryHost, HARNESS_IDLE_FRACTION } from "./host/warm-summary-host.ts";
 
@@ -12042,7 +12042,7 @@ ROUTES.push(createBotMessageRoutes({
   routines: () => routines,
   fromPhone: phones.fromPhone, notePhoneSend: phones.noteSend,
   desktopManaged: DESKTOP_MANAGED, cloudHome: Boolean(CLOUD_HOME), DirectSendRefused,
-  acceptDirectSend, directSendRefusal, startTurn, usageTriggerFor, messageSender, cloudGuestSendRefusal, cloudThreadRefusal, runOwners, runActor, resolveAccessRequest: (threadId, requestId, behavior, message) => lendingLifts?.resolve(threadId, requestId, behavior) ?? accessRequests.resolve(threadId, requestId, behavior, message), relayRefusal: CLOUD_TEAM ? (bot, email) => relayedSendRefusal(bot, email, Boolean(email && teamOwners.people?.list().some((one) => one.email === email && one.role !== "member"))) : undefined,
+  acceptDirectSend, directSendRefusal, startTurn, usageTriggerFor, messageSender, cloudGuestSendRefusal, cloudThreadRefusal, runOwners, runActor, resolveAccessRequest: (threadId, requestId, behavior, message) => reviewLoop.resolveCard(threadId, requestId, behavior, "approval card") ?? lendingLifts?.resolve(threadId, requestId, behavior) ?? accessRequests.resolve(threadId, requestId, behavior, message), relayRefusal: CLOUD_TEAM ? (bot, email) => relayedSendRefusal(bot, email, Boolean(email && teamOwners.people?.list().some((one) => one.email === email && one.role !== "member"))) : undefined,
   noAiRefusal: noAiNotice.refusal, cardAnswerRefusal, commandRememberRefusal, requestBehavior, requestedTaskBot, botForThread, threadBusy,
   botAtThreadCapacity, parksBehindCoordination, activeGroupTurnForBot, runningTurnInstance, engineSteersImages, resolveReplyTarget,
   turnSelection, policyModelRefusal, clearUnattended, drainQueuedSends, answeringCardAs, resolveAndSendTrust, resolveAndSendTeamSetup, resolveAndSendMcp,
@@ -12052,7 +12052,7 @@ ROUTES.push(createBotMessageRoutes({
   goals: oneOnOneGoals, inboxReply: teamMessages.replyIn, typedCardAnswer: askCards.typed, ...(CLOUD_TEAM ? { teamAiOwnerName: () => teamAiOwner(teamOwners.people?.list() ?? [], teamHost.personName)?.name ?? "" } : {}),
   relayedReaction: (threadId, messageId, person, emoji) => void store.setReaction(threadId, messageId, relayedPersonKey(person),
     { emoji, name: person.name ?? person.email, at: Date.now() }),
-}));
+})); const reviewLoop = createNightShiftLoop({ dataDir: DATA_DIR, store, audit: (row) => appendAdminAction(DATA_DIR, row), decide: (row) => appendDecision(DATA_DIR, row), send: (botId, threadId, text) => acceptDirectSend({ botId, threadId, text, trigger: { kind: "bot" }, personPresent: false }) }); ROUTES.push(createWorkTaskRoutes({ loop: reviewLoop, botExists: (id) => Boolean(store.bot(id)), person: (auth) => (auth.kind === "session" ? auth.session.email ?? auth.session.label : "loopback") }));
 const liveRoots = (threadId: string, botId: string | undefined) => { const bot = botId ? store.bot(botId) : store.botByThread(threadId); return bot ? messageFileRootsForThread(bot.id, threadId).filter((root) => root !== ATTACHMENTS_DIR) : null; }; const chatApps = createChatApps({ store, dataDir: DATA_DIR, liveRows: liveAppRows, liveRoots, paused: () => workspaceMaintenance.active || moveFreeze.frozen() });
 const chatAppsMcp = createChatAppsMcp({ store, apps: chatApps, dataDir: DATA_DIR, keys: mcpKeys, storedServers: () => cfg.mcpServers ?? {}, mountedServers: (bot) => teamConnections.engineMcp(bot), personMcp: teamConnections.personMcp, probeAs: (server) => mcpServersHost.probeAs(server), oauth: mcpOAuth });
 ROUTES.push(createChatAppRoutes({ store, apps: chatApps, threadRefusal: cloudThreadRefusal, mcpRpc: chatAppsMcp.rpc, threadVisible: (auth, threadId) => (auth.kind !== "session" || sessions.isLive(auth.session.id)) && visibleTo(viewerFor(auth)).thread(threadId) }));

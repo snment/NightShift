@@ -1,0 +1,98 @@
+# The NightShift review loop
+
+One task at a time moves through Researcher → Builder → Reviewer, with a person
+approving any push, merge, PR or deploy. The code is `server/review-loop/`.
+
+## Tasks
+
+Tasks live in `<data>/work-tasks.json`, written like `bots.json` and
+`groups.json` (whole file, temp file, fsync, rename, owner-only). A task has
+`id`, `slug`, `title`, `description`, `project` (the repository path),
+`room_id`, `owner_bot_id`, `status` (`To Do`, `Working`, `Needs Review`,
+`Done`, `Blocked`), `tags`, `research_path`, `handoff_path`, `branch`
+(`feat/<slug>`), `base_branch`, `worktree_path`, `review_round`,
+`review_notes`, `reviewed_head`, `diff_override`, `blocked_reason`,
+`token_usage` (per role), `approvals`, `created_by`, `created_at`, and
+`updated_at`.
+
+## Routing
+
+The bots are found by their names in `nightshift/team.yaml`: Researcher,
+Builder, Reviewer and Keeper.
+
+| Task | Goes to | What happens |
+| --- | --- | --- |
+| `To Do` + `research` | Researcher | `Working`. Writes `docs/research/<slug>-YYYY-MM-DD.md` in the task worktree, cites each URL with "accessed YYYY-MM-DD", and marks unverified claims `UNVERIFIED`. `research.done` then sets `To Do` + `dev`. |
+| `To Do` + `dev` | Builder | `Working` on `feat/<slug>` in its own worktree. Commits `docs/handoffs/<slug>.md`; `build.done` then sets `Needs Review` + `review`. |
+| `Needs Review` + `review` | Reviewer | `review_round` + 1. Reviews the diff only. `review.approve` sets `Done` and tells Keeper. `review.changes` (with `file:line` notes) sends it back to `To Do` + `dev`. In round 3, it sets `Blocked` instead. |
+
+Changing a task's status or tags routes it again. With no bot for a role, the
+task is set to `Blocked`. Only the task's current owner, or a person, can move it
+on. Only a person or Keeper can `stop`, `resume` or `reassign` it, and only a
+person can reset the review rounds or allow a larger diff.
+
+## Guardrails
+
+- **Handoff packet.** `build.done` refuses a packet that is missing any of
+  these sections:
+  - Files changed (with `path:line`)
+  - Decisions
+  - Tests (including what was not run)
+  - Risky / unsure
+  - Do not re-read
+
+  It also refuses a fenced block over 30 lines (a pasted file) and a packet over
+  250 lines.
+- **Diff size.** If `base...feat/<slug>` changes more than 400 lines or more
+  than 10 files, the task is set to `Blocked`, asking for a split. Only a
+  person's `task update --allow-large-diff` lets it through.
+- **Diff-only review.**
+  - Round 1 reads the handoff packet, `git diff --stat base...branch`,
+    `git diff base...branch`, the touched files, and their direct imports and
+    tests.
+  - Round 2 and later read only `git diff <last reviewed head>..branch`.
+- **Branch per task.** Each task's worktree is at
+  `<data>/worktrees/<slug>`. Nothing checks out, commits or pushes in the base
+  checkout.
+- **Push, merge, PR or deploy.** `task request-approval` works only on a
+  `Done` task. It posts an approval card with the exact diff and its sha256,
+  in the task's room or Keeper's chat.
+  - Answer the card, or run `task approve-diff --sha256`.
+  - The answer is recorded and audited. If the branch changes after the card
+    was shown, the request goes stale.
+  - The loop never pushes or merges. The person does.
+
+## Audit
+
+Every event is written to the admin activity log (`<data>/admin-activity/`)
+with category `task`. The events are: created, assigned, branch-created,
+research-written, handoff-written, review-started, review-approved,
+review-changes, review-cap, split-flagged, blocked, resumed, reassigned, usage
+(tokens per role), diff-approval-requested, diff-approval-decided, deleted.
+
+## Driving it
+
+```sh
+openmausbot task create "Fix docs typo" --project . --tags research --room ROOM_ID
+openmausbot tasks
+openmausbot task show fix-docs-typo
+openmausbot task transition fix-docs-typo research.done --research-path docs/research/fix-docs-typo-2026-11-20.md --as-bot RESEARCHER_ID
+openmausbot task transition fix-docs-typo build.done --as-bot BUILDER_ID
+openmausbot task transition fix-docs-typo review.approve --as-bot REVIEWER_ID
+openmausbot task transition fix-docs-typo usage --role reviewer --input-tokens 1200 --output-tokens 300
+openmausbot task request-approval fix-docs-typo --action push
+```
+
+The REST endpoints:
+
+- `GET /api/tasks`
+- `POST /api/tasks`
+- `GET`, `PATCH` and `DELETE /api/tasks/:id`
+- `POST /api/tasks/:id/transition`
+- `POST /api/tasks/:id/request-approval`
+- `POST /api/tasks/:id/approve-diff`
+
+**Open risk:** a bot's shell reaches the server as loopback, just like the
+person's CLI. `as_bot` names the bot, and a loopback call without it counts as
+the person. So the approval card, answered through the shared card route, is
+the approval path a bot's shell cannot answer for the person.

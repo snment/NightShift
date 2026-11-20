@@ -15,6 +15,7 @@ export const HEADLESS_USAGE = `Drive a running workspace (scripts, CI, other age
   openmausbot engine set claude --key-env ANTHROPIC_API_KEY   give it an engine without a screen
   openmausbot connect URL --code CODE --out FILE              get a token for a workspace elsewhere
   openmausbot token create NAME --out FILE [--expires 90d]    a token for CI that ends on its date (token list, token revoke ID)
+  openmausbot tasks | task create | task transition | task show   the review loop: research, build, diff-only review
   openmausbot new-bot | new-channel | set-model | edit | mcp
 
   Server: --url URL (or OPENMAUSBOT_URL), --port N (or OMB_PORT), else this computer's.

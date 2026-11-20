@@ -10,6 +10,7 @@ import { exportVerb } from "./export.ts";
 import { Output, processIo, type HeadlessIo } from "./output.ts";
 import { runVerb, waitVerb } from "./run.ts";
 import { teamApplyVerb, teamExportVerb } from "./team-apply.ts";
+import { tasksVerb } from "./tasks.ts";
 import { tokenVerb } from "./token.ts";
 
 const T = "TARGET is a bot or room by name or id, or --bot ID, --channel ID, --thread ID; --task ID picks one of its conversations.";
@@ -92,6 +93,18 @@ openmausbot doctor --host [--data-dir DIR] [--port 8799] [--domain HOST]
   Then: --url URL --token-file FILE. It is listed with openmausbot sessions too.`,
   "token list": "openmausbot token list\n  The access tokens, their scope, when each ends and when it was last used (never the token).",
   "token revoke": "openmausbot token revoke ID\n  End an access token at once (openmausbot token list shows the ids).",
+  tasks: "openmausbot tasks\n  The review loop's tasks: status, tags, owner and review round (docs/review-loop.md).",
+  task: "openmausbot task create | show | update | transition | request-approval | approve-diff   (see help task create, …)",
+  "task create": `openmausbot task create TITLE --project PATH [--tags research|dev] [--description D] [--slug S] [--room ROOM_ID] [--base BRANCH]
+  A review-loop task. To Do + research goes to Researcher, To Do + dev to Builder on feat/<slug>.`,
+  "task show": "openmausbot task show ID\n  One task: branch, worktree, packets, review notes, token counts and approvals.",
+  "task update": `openmausbot task update ID [--status S] [--tags a,b] [--title T] [--description D] [--room ROOM_ID] [--allow-large-diff]
+  A person's edit; a status and tag change routes the task again. --allow-large-diff lets a diff over 400 lines or 10 files go to review.`,
+  "task transition": `openmausbot task transition ID EVENT [--as-bot BOT_ID] …
+  research.done --research-path P | build.done [--handoff-path P] | review.approve [--notes N] | review.changes --notes "file:line …"
+  stop [--reason R] | resume [--reset-rounds] | reassign --bot ID [--role R] | usage --role R --input-tokens N --output-tokens N`,
+  "task request-approval": "openmausbot task request-approval ID [--action push|merge|pr|deploy]\n  Ask a person to approve the exact diff of a Done task's branch. Nothing is pushed or merged.",
+  "task approve-diff": "openmausbot task approve-diff ID --request ID --sha256 SHA (--approve | --deny)\n  A person's answer for the exact diff named by its sha256. It records the answer; the person pushes or merges.",
 };
 
 export interface HeadlessOptions {
@@ -110,6 +123,8 @@ const VERBS: Record<string, (ctx: VerbContext) => Promise<VerbOutcome>> = {
   interrupt, "new-bot": newBot, "new-channel": newChannel, "set-model": setModel, edit, export: exportVerb, events: eventsVerb,
   "team apply": teamApplyVerb, "team export": teamExportVerb, "engine set": engineVerb, "engine list": engineVerb, connect: connectVerb,
   "token create": tokenVerb, "token list": tokenVerb, "token revoke": tokenVerb,
+  tasks: tasksVerb, "task create": tasksVerb, "task show": tasksVerb, "task update": tasksVerb, "task transition": tasksVerb,
+  "task request-approval": tasksVerb, "task approve-diff": tasksVerb,
 };
 
 async function execute(argv: readonly string[], options: HeadlessOptions, io: HeadlessIo): Promise<{ outcome: VerbOutcome; output: Output; client?: HeadlessClient }> {
