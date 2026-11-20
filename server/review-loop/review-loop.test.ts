@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { removeTempDir } from "../testing/cleanup.ts";
 import { parseCommand } from "../headless/args.ts";
 import { taskAuditRow } from "./audit.ts";
-import { diffGate, diffSha256, localGit, parseNumstat } from "./git.ts";
+import { diffGate, diffSha256, gitBinary, localGit, parseNumstat } from "./git.ts";
 import { validateHandoff, validateResearch } from "./handoff.ts";
 import { diffApprovalCard, DIFF_APPROVAL_TOOL } from "./host.ts";
 import { LoopError, ReviewLoop, type LoopActor, type TaskAuditEvent } from "./loop.ts";
@@ -288,6 +288,15 @@ describe("handoff and research packets", () => {
     const task = newTask(h);
     writeFileSync(join(task.worktree_path!, "r.md"), "just memory");
     expect(() => h.loop.transition(task.id, { event: "research.done", research_path: "r.md" }, bot("researcher"))).toThrow(/research packet rejected/);
+  });
+});
+
+describe("git binary", () => {
+  it("uses NIGHTSHIFT_GIT only when it is an absolute path", () => {
+    expect(gitBinary({})).toBe("git");
+    expect(gitBinary({ NIGHTSHIFT_GIT: "git-evil" })).toBe("git");
+    const absolute = process.platform === "win32" ? String.raw`C:\Program Files\Git\bin\git.exe` : "/usr/bin/git";
+    expect(gitBinary({ NIGHTSHIFT_GIT: absolute })).toBe(absolute);
   });
 });
 

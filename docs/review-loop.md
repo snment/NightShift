@@ -96,3 +96,14 @@ The REST endpoints:
 person's CLI. `as_bot` names the bot, and a loopback call without it counts as
 the person. So the approval card, answered through the shared card route, is
 the approval path a bot's shell cannot answer for the person.
+
+## Verifying it
+
+`server/review-loop/*.test.ts` cover the store, the routing, the 3-round cap,
+the handoff validator, the diff gate, worktree isolation, diff approval, the
+audit events and the HTTP routes.
+
+On a verification fixture (`scripts/control-omb.ts launch`), the server's PATH
+holds only `node`. To let the loop run git there, set `NIGHTSHIFT_GIT` to an
+absolute path to git; nothing else crosses. Without it, a new task is set to
+`Blocked` with `could not create feat/<slug>: spawnSync git ENOENT`.

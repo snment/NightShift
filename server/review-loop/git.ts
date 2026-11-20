@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 
 import { MAX_DIFF_FILES, MAX_DIFF_LINES } from "./model.ts";
 
@@ -29,8 +29,14 @@ export interface TaskGit {
   readFile(repo: string, branch: string, worktree: string | null, path: string): string | null;
 }
 
+/** NIGHTSHIFT_GIT: an absolute path to git, for a server whose PATH has none (the sealed verification fixture). */
+export function gitBinary(env: NodeJS.ProcessEnv = process.env): string {
+  const named = env.NIGHTSHIFT_GIT?.trim();
+  return named && isAbsolute(named) ? named : "git";
+}
+
 function git(cwd: string, args: string[]): string {
-  return execFileSync("git", args, { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+  return execFileSync(gitBinary(), args, { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
 }
 
 function tryGit(cwd: string, args: string[]): string | null {

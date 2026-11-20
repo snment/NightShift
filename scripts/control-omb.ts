@@ -4,7 +4,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs, type ParseArgsOptionsConfig } from "node:util";
 
@@ -170,6 +170,8 @@ export function verificationServerEnvironment(parentEnv: NodeJS.ProcessEnv, data
     // FAKE_CLAUDE_DUMP stays the launcher's: assertions read fixtureDumpPath.
     if ((key.startsWith("FAKE_CLAUDE_") || key.startsWith("FAKE_CODEX_TEXT_") || key.startsWith("FAKE_CODEX_COMMAND") || key.startsWith("FAKE_STREAM_") || key === "FAKE_ACP_HANG_ON") && key !== "FAKE_CLAUDE_DUMP" && value) childEnv[key] = value;
   }
+  // The review loop runs git; only an absolute path crosses, so the sealed PATH stays sealed.
+  if (parentEnv.NIGHTSHIFT_GIT && isAbsolute(parentEnv.NIGHTSHIFT_GIT)) childEnv.NIGHTSHIFT_GIT = parentEnv.NIGHTSHIFT_GIT;
   // Enables POST /api/testing/org-library; the route does not exist without it.
   if (parentEnv.OMB_TEST_ORG_LIBRARY_KEY) childEnv.OMB_TEST_ORG_LIBRARY_KEY = parentEnv.OMB_TEST_ORG_LIBRARY_KEY;
   // Enables POST /api/testing/internal-capability (a bot's own tool routes, such as publish_page); the route refuses without it.
