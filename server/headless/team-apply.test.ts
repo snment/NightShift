@@ -10,8 +10,10 @@ import { approvalModeFor } from "../../shared/approval-mode.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
 import type { VerbContext } from "./context.ts";
 import { Output } from "./output.ts";
-import { botPatch, botSkillDirs, reconcile, skillFilePath, teamExportVerb, type ApplyOptions } from "./team-apply.ts";
-import { loadTeamFile, type DesiredBot, type TeamFile } from "./team-file.ts";
+import { writeFileSync } from "node:fs";
+
+import { botPatch, botSkillDirs, reconcile, routinePatch, skillFilePath, teamExportVerb, type ApplyOptions } from "./team-apply.ts";
+import { loadTeamFile, type DesiredBot, type DesiredRoutine, type TeamFile } from "./team-file.ts";
 
 type Rec = Record<string, any>;
 
@@ -23,6 +25,7 @@ function workspace(seed: { bots?: Rec[]; groups?: Rec[]; sections?: string[]; co
     briefs: {} as Record<string, string>,
     skills: {} as Record<string, Record<string, { text: string; enabled: boolean }>>,
     config: seed.config ?? { anthropic: { configured: false, everyClaudeBot: true } },
+    routines: [] as Rec[],
   };
   const writes: string[] = [];
   let ids = 0;
@@ -73,6 +76,17 @@ function workspace(seed: { bots?: Rec[]; groups?: Rec[]; sections?: string[]; co
       return { text: skills[m[4]!]?.text };
     }
     if (m[1] === "bots" && m[3] === "skill-template") { (state.skills[bot!.id] ??= {})[body.name] = { text: body.text, enabled: body.enabled }; return {}; }
+    if (url.pathname === "/api/routines" && method === "GET") return { routines: state.routines, runs: [] };
+    if (url.pathname === "/api/routines" && method === "POST") {
+      const routine = { id: `routine-${++ids}`, target: "bot", ...body };
+      state.routines.push(routine);
+      return { routine };
+    }
+    if (m[1] === "routines" && m.length === 3 && method === "PATCH") {
+      const routine = state.routines.find((candidate) => candidate.id === m[2])!;
+      Object.assign(routine, body);
+      return { routine };
+    }
     if (m[1] === "groups" && method === "DELETE") { state.groups = state.groups.filter((group) => group.id !== m[2]); return { ok: true }; }
     throw new Error(`no route for ${method} ${path}`);
   };
@@ -101,6 +115,7 @@ const file = (patch: Partial<TeamFile> = {}): TeamFile => ({
   path: "/files/launch-room.yaml", engines: [], warnings: [],
   teams: [{ name: "Launch Room", brief: "We rehearse a launch.", prune: true }],
   bots: [lead, priya], rooms: [{ name: "Rehearsal", team: "Launch Room", members: ["Room Lead", "Priya"], brief: "The room.", responder: "Room Lead" }],
+  routines: [],
   ...patch,
 });
 const options = (patch: Partial<ApplyOptions> = {}): ApplyOptions => ({ apply: true, prune: false, rotateSecrets: false, waitIdleMs: 0, env: {}, ...patch });
@@ -358,6 +373,74 @@ describe("team export", () => {
       writes.length = 0;
       expect(await reconcile(client, back, options())).toMatchObject({ created: 0, changed: 0, deleted: 0, writes: 0 });
       expect(state.bots.find((bot) => bot.name === "Room Lead")!.soul).toContain(KEY);
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+});
+
+describe("team routines", () => {
+  const keeper: DesiredBot = { name: "Keeper", team: "Launch Room", manages: [], approval: "ask", computer: "off", skills: [] };
+  const weekly: DesiredRoutine = {
+    name: "Weekly research", bot: "Keeper", prompt: "NightShift research: Agent tooling\nBase: nightshift/phase0\n\nWhat changed this week.",
+    schedule: { type: "cron", expression: "0 7 * * MON", timeZone: "Europe/Berlin" },
+  };
+  const ctxFor = (out: string, client: HeadlessClient) => ({ verb: "team export", flags: { out }, positionals: [], env: {}, io: { out: () => undefined, err: () => undefined, readStdin: async () => "" },
+    output: new Output({ out: () => undefined, err: () => undefined, readStdin: async () => "" }, {}), client: async () => client,
+    signal: new AbortController().signal, defaultWaitMs: 1_000 } as VerbContext);
+
+  it("creates a routine for its bot, turned on, and then has nothing left to do", async () => {
+    const { client, state, writes } = workspace();
+    const plan = await reconcile(client, file({ bots: [lead, priya, keeper], routines: [weekly] }), options({ apply: false }));
+    expect(plan.lines).toContain('routine "Weekly research": create (Keeper, cron 0 7 * * MON Europe/Berlin)');
+    expect(writes).toEqual([]);
+    await reconcile(client, file({ bots: [lead, priya, keeper], routines: [weekly] }), options());
+    expect(state.routines).toEqual([expect.objectContaining({ name: "Weekly research", botId: state.bots.find((bot) => bot.name === "Keeper")!.id, enabled: true, runOn: "maus",
+      prompt: weekly.prompt, schedule: weekly.schedule })]);
+    writes.length = 0;
+    expect(await reconcile(client, file({ bots: [lead, priya, keeper], routines: [weekly] }), options())).toMatchObject({ created: 0, changed: 0, deleted: 0, writes: 0 });
+  });
+
+  it("changes a routine's prompt, schedule or switch, and leaves a switch the file does not name", () => {
+    const echo = { prompt: weekly.prompt, schedule: weekly.schedule, enabled: false };
+    expect(routinePatch(weekly, echo)).toEqual({ patch: {}, changes: [] });
+    expect(routinePatch({ ...weekly, enabled: true }, echo)).toEqual({ patch: { enabled: true }, changes: ["turn on"] });
+    const moved = routinePatch({ ...weekly, prompt: `${weekly.prompt} More.`, schedule: { ...weekly.schedule, expression: "0 8 * * MON" } }, echo);
+    expect(moved.changes).toEqual(["prompt 1 line changed", "schedule cron 0 7 * * MON Europe/Berlin → cron 0 8 * * MON Europe/Berlin"]);
+  });
+
+  it("round-trips a research routine through export and apply", async () => {
+    const { client, state } = workspace();
+    await reconcile(client, file({ bots: [lead, priya, keeper], routines: [weekly] }), options());
+    const dir = mkdtempSync(join(tmpdir(), "omb-team-export-"));
+    try {
+      const out = join(dir, "team.yaml");
+      await teamExportVerb(ctxFor(out, client));
+      expect(readFileSync(out, "utf8")).toContain("research:");
+      const back = loadTeamFile(out);
+      expect(back.routines).toEqual([{ ...weekly, enabled: true }]);
+      expect(await reconcile(client, back, options())).toMatchObject({ created: 0, changed: 0, writes: 0 });
+      expect(state.routines).toHaveLength(1);
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
+  it("reads a research block, and refuses a research routine that is not Keeper's, a bad cron, or a routine with no prompt", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "omb-team-file-"));
+    try {
+      const write = (routine: string) => {
+        const path = join(dir, "team.yaml");
+        writeFileSync(path, `version: 1\nbots:\n  - name: Keeper\n    computer: off\n  - name: Researcher\n    computer: off\nroutines:\n${routine}`);
+        return path;
+      };
+      const good = loadTeamFile(write("  - name: Weekly\n    bot: keeper\n    schedule: { cron: \"0 7 * * mon\", timeZone: Europe/Berlin }\n    research: { title: Agent tooling, description: What changed., base: nightshift/phase0 }\n"));
+      expect(good.routines).toEqual([{ name: "Weekly", bot: "Keeper", prompt: "NightShift research: Agent tooling\nBase: nightshift/phase0\n\nWhat changed.",
+        schedule: { type: "cron", expression: expect.stringMatching(/^0 7 \* \* mon$/i), timeZone: "Europe/Berlin" } }]);
+      expect(() => loadTeamFile(write("  - name: W\n    bot: Researcher\n    schedule: { cron: \"0 7 * * 1\", timeZone: UTC }\n    research: { title: T }\n"))).toThrow(/belongs to Keeper/);
+      expect(() => loadTeamFile(write("  - name: W\n    bot: Keeper\n    schedule: { cron: \"0 7 31 2 *\", timeZone: UTC }\n    prompt: Hi\n"))).toThrow(/schedule/);
+      expect(() => loadTeamFile(write("  - name: W\n    bot: Keeper\n    schedule: { cron: \"0 7 * * 1\", timeZone: UTC }\n"))).toThrow(/a prompt or a research block/);
+      expect(() => loadTeamFile(write("  - name: W\n    bot: Nobody\n    schedule: { cron: \"0 7 * * 1\", timeZone: UTC }\n    prompt: Hi\n"))).toThrow(/not in the file/);
     } finally {
       await removeTempDir(dir);
     }

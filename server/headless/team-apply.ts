@@ -13,7 +13,8 @@ import { describeMs, EXIT, flag, HeadlessError, parseDuration, usageError } from
 import { explain, type HeadlessClient } from "./client.ts";
 import type { VerbContext, VerbOutcome } from "./context.ts";
 import { applyEngine, ENGINE_KINDS, readSecret } from "./engine.ts";
-import { everyTool, loadTeamFile, type DesiredBot, type TeamFile } from "./team-file.ts";
+import { parseRoutineResearch } from "../review-loop/routine-research.ts";
+import { everyTool, loadTeamFile, type DesiredBot, type DesiredRoutine, type TeamFile } from "./team-file.ts";
 
 type Rec = Record<string, any>;
 const enc = encodeURIComponent;
@@ -313,6 +314,24 @@ export async function reconcile(client: HeadlessClient, file: TeamFile, options:
     if (options.apply) await tool("update_channel", { channel_id: existing.id, ...change });
   }
 
+  if (file.routines.length) {
+    const existing: Rec[] = (await client.json<Rec>("/api/routines")).routines ?? [];
+    for (const routine of file.routines) {
+      const owner = botId(routine.bot);
+      if (!owner && !(!options.apply && created.has(key(routine.bot)))) throw new HeadlessError(`routine "${routine.name}": no bot named "${routine.bot}"`, EXIT.failed);
+      const found = owner ? existing.find((candidate) => candidate.botId === owner && candidate.target !== "room-goal" && key(candidate.name) === key(routine.name)) : undefined;
+      if (!found) {
+        note(`routine "${routine.name}": create (${routine.bot}, cron ${routine.schedule.expression} ${routine.schedule.timeZone}${routine.enabled === false ? ", off" : ""})`, "created");
+        if (options.apply) await write("/api/routines", { method: "POST", body: JSON.stringify(routineBody(routine, owner!)) });
+        continue;
+      }
+      const { patch, changes } = routinePatch(routine, found);
+      if (!changes.length) { note("", "unchanged"); continue; }
+      note(`routine "${routine.name}": update ${changes.join("; ")}`, "changed");
+      if (options.apply) await write(`/api/routines/${enc(found.id)}`, { method: "PATCH", body: JSON.stringify(patch) });
+    }
+  }
+
   for (const team of file.teams) {
     const section = sectionNamed(team.name);
     if (!section) continue;
@@ -330,6 +349,23 @@ export async function reconcile(client: HeadlessClient, file: TeamFile, options:
     }
   }
   return tally;
+}
+
+function routineBody(routine: DesiredRoutine, botId: string): Rec {
+  return { name: routine.name, prompt: routine.prompt, botId, target: "bot", runOn: "maus", schedule: routine.schedule, enabled: routine.enabled ?? true };
+}
+
+export function routinePatch(routine: DesiredRoutine, echo: Rec): { patch: Rec; changes: string[] } {
+  const patch: Rec = {};
+  const changes: string[] = [];
+  if (String(echo.prompt ?? "").trimEnd() !== routine.prompt) { patch.prompt = routine.prompt; changes.push(`prompt ${lines(changedLines(String(echo.prompt ?? ""), routine.prompt))} changed`); }
+  const schedule: Rec = echo.schedule ?? {};
+  if (schedule.type !== "cron" || schedule.expression !== routine.schedule.expression || schedule.timeZone !== routine.schedule.timeZone) {
+    patch.schedule = routine.schedule;
+    changes.push(`schedule ${schedule.type === "cron" ? `cron ${schedule.expression} ${schedule.timeZone}` : schedule.type ?? "none"} → cron ${routine.schedule.expression} ${routine.schedule.timeZone}`);
+  }
+  if (routine.enabled !== undefined && Boolean(echo.enabled) !== routine.enabled) { patch.enabled = routine.enabled; changes.push(routine.enabled ? "turn on" : "turn off"); }
+  return { patch, changes };
 }
 
 async function waitIdle(client: HeadlessClient, bot: Rec, waitMs: number): Promise<void> {
@@ -467,6 +503,20 @@ export async function teamExportVerb(ctx: VerbContext): Promise<VerbOutcome> {
         : responder.kind === "member" && byId.has(responder.botId) ? { responder: byId.get(responder.botId) } : {}),
     };
   });
+  const exportedIds = new Set(bots.map((bot) => bot.id));
+  const routineEntries = ((await client.json<Rec>("/api/routines")).routines ?? [])
+    .filter((routine: Rec) => routine.target !== "room-goal" && exportedIds.has(routine.botId) && routine.schedule?.type === "cron")
+    .map((routine: Rec) => {
+      const research = parseRoutineResearch(String(routine.prompt ?? ""));
+      return {
+        name: routine.name, bot: byId.get(routine.botId),
+        schedule: { cron: routine.schedule.expression, timeZone: routine.schedule.timeZone },
+        ...(research
+          ? { research: { title: research.title, ...(research.description ? { description: clean(research.description, `routine "${routine.name}" description`) } : {}), ...(research.base ? { base: research.base } : {}) } }
+          : { prompt: clean(String(routine.prompt ?? ""), `routine "${routine.name}" prompt`) }),
+        enabled: Boolean(routine.enabled),
+      };
+    });
   const config = await client.json<Rec>("/api/config");
   const engines: Rec = {};
   for (const [kind, spec] of Object.entries(ENGINE_KINDS)) {
@@ -476,13 +526,13 @@ export async function teamExportVerb(ctx: VerbContext): Promise<VerbOutcome> {
       ...(kind === "claude" && config.anthropic?.everyClaudeBot === false ? { everyClaudeBot: false } : {}) };
   }
   const document = { version: 1, ...(Object.keys(engines).length ? { engines } : {}), ...(teamEntries.length ? { teams: teamEntries } : {}),
-    bots: botEntries, ...(roomEntries.length ? { rooms: roomEntries } : {}) };
+    bots: botEntries, ...(roomEntries.length ? { rooms: roomEntries } : {}), ...(routineEntries.length ? { routines: routineEntries } : {}) };
   if (!botEntries.length) throw new HeadlessError("no bots to export", EXIT.failed);
   writeFileSync(resolve(out), `# Written by openmausbot team export on ${new Date().toISOString().slice(0, 10)}.\n# Engine keys are placeholders (SET_ME): set them before applying this elsewhere.\n${stringifyYaml(document, { lineWidth: 0 })}`);
   return {
-    result: { ok: true, file: resolve(out), teams: teamEntries.length, bots: botEntries.length, rooms: roomEntries.length, skills, engines: Object.keys(engines), skipped, redacted },
+    result: { ok: true, file: resolve(out), teams: teamEntries.length, bots: botEntries.length, rooms: roomEntries.length, routines: routineEntries.length, skills, engines: Object.keys(engines), skipped, redacted },
     exitCode: EXIT.done,
-    human: [`Wrote ${out}: ${teamEntries.length} teams, ${botEntries.length} bots, ${roomEntries.length} rooms, ${skills} skills.`,
+    human: [`Wrote ${out}: ${teamEntries.length} teams, ${botEntries.length} bots, ${roomEntries.length} rooms, ${routineEntries.length} routines, ${skills} skills.`,
       ...(Object.keys(engines).length ? ["Engine keys are placeholders (SET_ME): set them before applying it elsewhere."] : []),
       ...(redacted.length ? [`A secret was taken out of: ${redacted.join(", ")} (apply leaves those as they are).`] : []),
       ...skipped.map((line) => `not exported: ${line}`)],

@@ -7,12 +7,17 @@ import { z } from "zod";
 
 import { BOT_PROFILE_LIMITS, fitsOnOneLine } from "../../shared/bot-profile.ts";
 import { parseSkillMd } from "../../shared/skill-md.ts";
+import { normalizeCronSchedule } from "../../shared/routine-schedule.ts";
 import { parseToolScope, type ToolScope } from "../../shared/tool-scope.ts";
+import { routineResearchPrompt } from "../review-loop/routine-research.ts";
 import { usageError } from "./args.ts";
 
 export const TEAM_BRIEF_MAX_BYTES = 24_000;
 export const ROOM_BRIEF_MAX_CHARS = 12_000;
 export const SKILL_MAX_BYTES = 262_144;
+export const ROUTINE_PROMPT_MAX_CHARS = 20_000;
+/** The bot whose routines may start review-loop research (server/review-loop/host.ts ROLE_BOT_NAMES.keeper). */
+export const RESEARCH_ROUTINE_BOT = "Keeper";
 
 const secret = z.union([
   z.object({ env: z.string().trim().min(1) }).strict(),
@@ -76,6 +81,18 @@ const teamFileSchema = z.object({
     brief: textOrFile.optional(),
     responder: z.string().trim().min(1).optional(),
   }).strict()).optional(),
+  routines: z.array(z.object({
+    name: oneLine("a name", 80).pipe(z.string().trim().min(1, "must not be empty")),
+    bot: z.string().trim().min(1),
+    schedule: z.object({ cron: z.string().trim().min(1).max(256), timeZone: z.string().trim().min(1).max(100) }).strict(),
+    prompt: textOrFile.optional(),
+    research: z.object({
+      title: oneLine("a title", 120).pipe(z.string().trim().min(1, "must not be empty")),
+      description: textOrFile.optional(),
+      base: z.string().trim().regex(/^[\w./-]+$/, "must be a branch name").optional(),
+    }).strict().optional(),
+    enabled: z.boolean().optional(),
+  }).strict()).optional(),
 }).strict();
 
 export type Secret = z.infer<typeof secret>;
@@ -104,6 +121,15 @@ export interface DesiredBot {
 }
 export interface DesiredRoom { name: string; team?: string; members: string[]; brief?: string; responder?: string }
 export interface DesiredTeam { name: string; brief?: string; prune: boolean }
+export interface DesiredRoutine {
+  name: string;
+  bot: string;
+  /** What the routine runs: the file's prompt, or the research line the review loop reads (routine-research.ts). */
+  prompt: string;
+  schedule: { type: "cron"; expression: string; timeZone: string };
+  /** Absent: a new routine is turned on, and an existing one keeps its switch. */
+  enabled?: boolean;
+}
 export interface DesiredEngine { kind: string; key: Secret; baseUrl?: string | Secret; everyClaudeBot?: boolean; install?: boolean }
 
 export interface TeamFile {
@@ -112,6 +138,7 @@ export interface TeamFile {
   teams: DesiredTeam[];
   bots: DesiredBot[];
   rooms: DesiredRoom[];
+  routines: DesiredRoutine[];
   warnings: string[];
 }
 
@@ -267,5 +294,28 @@ export function checkTeamFile(input: TeamFileInput, file: string, dir: string): 
     return [{ kind: ENGINE_KIND[name]!, key: anchored(spec.key), ...(spec.baseUrl !== undefined ? { baseUrl: anchored(spec.baseUrl) } : {}),
       ...(spec.everyClaudeBot !== undefined ? { everyClaudeBot: spec.everyClaudeBot } : {}), ...(spec.install ? { install: true } : {}) }];
   });
-  return { path: file, engines, teams, bots, rooms, warnings };
+  const routineSeen = new Set<string>();
+  const routines: DesiredRoutine[] = (input.routines ?? []).map((routine) => {
+    const where = `routine "${routine.name}"`;
+    if (routineSeen.has(key(routine.name))) throw usageError(`routines: "${routine.name}" is listed twice`);
+    routineSeen.add(key(routine.name));
+    if (!seen.has(key(routine.bot))) throw usageError(`${where}: bot "${routine.bot}" is not in the file`);
+    if ((routine.prompt === undefined) === (routine.research === undefined)) throw usageError(`${where}: give it a prompt or a research block, not both`);
+    if (routine.research && key(routine.bot) !== key(RESEARCH_ROUTINE_BOT)) throw usageError(`${where}: a research routine belongs to ${RESEARCH_ROUTINE_BOT}, who hands the task to the Researcher`);
+    let schedule: DesiredRoutine["schedule"];
+    try {
+      const normal = normalizeCronSchedule({ type: "cron", expression: routine.schedule.cron, timeZone: routine.schedule.timeZone });
+      schedule = { type: "cron", expression: normal.expression, timeZone: normal.timeZone };
+    } catch (error) {
+      throw usageError(`${where}: schedule: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const prompt = routine.research
+      ? routineResearchPrompt({ title: routine.research.title, description: text(dir, routine.research.description, `${where} description`) ?? "", ...(routine.research.base ? { base: routine.research.base } : {}) })
+      : (text(dir, routine.prompt, `${where} prompt`) ?? "").trimEnd();
+    if (!prompt.trim()) throw usageError(`${where}: its prompt is empty`);
+    if (prompt.length > ROUTINE_PROMPT_MAX_CHARS) throw usageError(`${where}: its prompt is over ${ROUTINE_PROMPT_MAX_CHARS} characters`);
+    if (kept(prompt, `${where}: its prompt`) === undefined) throw usageError(`${where}: its prompt has a secret taken out («redacted …»); write the prompt again`);
+    return { name: routine.name, bot: seen.get(key(routine.bot))!, prompt, schedule, ...(routine.enabled !== undefined ? { enabled: routine.enabled } : {}) };
+  });
+  return { path: file, engines, teams, bots, rooms, routines, warnings };
 }

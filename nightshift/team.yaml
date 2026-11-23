@@ -1,5 +1,6 @@
 # NightShift starter team (Phase 0, Step 2).
 # Apply: node --experimental-strip-types server/openmausbot.ts team apply nightshift/team.yaml --url http://127.0.0.1:PORT
+# Check: the same with --check prints "No changes." when the workspace matches this file (routines included).
 # Bot names are working names for Phase 0; do not rename until the user confirms the final names.
 version: 1
 
@@ -51,3 +52,19 @@ bots:
     computer: off
     browser: false
     soul: { file: souls/keeper.md }
+
+routines:
+  # Keeper's research routine: each run starts a research-only review-loop task for the Researcher, who writes
+  # docs/research/<slug>-YYYY-MM-DD.md in the task's worktree; Keeper then reports it and may propose a MEMORY.md
+  # change (shown as a diff, saved only after approval). Nothing is pushed, merged, deployed, sent, paid or deleted.
+  - name: Weekly agent tooling scan
+    bot: Keeper
+    schedule: { cron: "0 6 * * MON", timeZone: UTC }
+    research:
+      title: Agent tooling scan
+      base: nightshift/phase0
+      description: |
+        What changed in the last week in the engines the NightShift bots run on (Claude Code, Codex CLI, Grok CLI):
+        new releases, model ids, prices, limits and breaking changes. Official release notes and docs only.
+        Say what the Builder should and should not use. Keep it short.
+    enabled: true
