@@ -129,7 +129,10 @@ is the approval path a bot's shell cannot answer for the person.
   idle is handed back to that bot, told that it was cut off and to check what
   it already did (`task.redispatched`). If a second restart cuts the same
   hand-over, the task is set to `Blocked` as interrupted and Keeper tells the
-  person (`task.interrupted`); a person resumes it.
+  person (`task.interrupted`); a person resumes it. A task the restart caught
+  after it was saved but before it was handed out (`To Do`, tagged `research`
+  or `dev`, no owner) is handed out then, and a rerun of its routine run hands
+  it out too.
 - **Memory proposals** are on disk; a pending one is still pending.
 
 ## Audit
