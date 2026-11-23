@@ -68,7 +68,17 @@ Every event is written to the admin activity log (`<data>/admin-activity/`)
 with category `task`. The events are: created, assigned, branch-created,
 research-written, handoff-written, review-started, review-approved,
 review-changes, review-cap, split-flagged, blocked, resumed, reassigned, usage
-(tokens per role, from the usage ledger or a manual transition), diff-approval-requested, diff-approval-decided, deleted.
+(tokens per role, from the usage ledger or a manual transition), diff-approval-requested, diff-approval-decided, deleted,
+routine-started, redispatched, interrupted.
+
+## Routines, restarts and MEMORY.md
+
+A Keeper routine whose prompt starts with `NightShift research:` creates a
+research-only task (tags `research` + `routine`) that ends at `Done` once the
+packet is written, and Keeper reports it. A restart hands a task a bot was
+working on back to it once. A bot's branch may not change `MEMORY.md`; Keeper
+proposes changes as a diff a person approves. See
+[NightShift routines and team memory](nightshift-routines-memory.md).
 
 ## Token usage
 
