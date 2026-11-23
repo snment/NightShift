@@ -160,6 +160,33 @@ describe("restart recovery", () => {
     expect(again.dispatched).toEqual([]);
   });
 
+  it("hands out a routine task the restart caught after it was saved but before it was handed out", () => {
+    const dataDir = join(root, "data");
+    const cut = harness(dataDir);
+    const saved = cut.store.create({ title: "Agent tooling 2026-11-23", project: repo, tags: ["research", "routine"], routine_run_id: "run-1", created_by: "routine:routine-1" });
+    const rerun = harness(dataDir);
+    const task = rerun.loop.createForRoutine(routineRun());
+    expect(task).toMatchObject({ id: saved.id, status: "Working", owner_bot_id: ROLES.researcher });
+    expect(rerun.dispatched.map((one) => one.role)).toEqual(["researcher"]);
+    expect(rerun.loop.createForRoutine(routineRun()).id).toBe(saved.id);
+    expect(rerun.dispatched).toHaveLength(1);
+  });
+
+  it("hands out an unrouted task on restart, and leaves Blocked and untagged tasks alone", () => {
+    const dataDir = join(root, "data");
+    const cut = harness(dataDir);
+    const saved = cut.store.create({ title: "Cut short", project: repo, tags: ["research", "routine"], routine_run_id: "run-1", created_by: "routine:routine-1" });
+    cut.loop.create({ title: "Waiting", project: repo, tags: [], created_by: "loopback" }, PERSON);
+    const stopped = cut.loop.create({ title: "Stopped", project: repo, tags: ["research"], created_by: "loopback" }, PERSON);
+    cut.loop.transition(stopped.id, { event: "stop" }, PERSON);
+    const after = harness(dataDir);
+    const found = after.loop.recoverAfterRestart(() => false);
+    expect(found.map((one) => [one.task.id, one.outcome])).toEqual([[saved.id, "routed"]]);
+    expect(after.store.get(saved.id)).toMatchObject({ status: "Working", owner_bot_id: ROLES.researcher });
+    expect(after.dispatched.map((one) => one.role)).toEqual(["researcher"]);
+    expect(after.audit.map((event) => event.action)).toEqual(["task.branch-created", "task.assigned"]);
+  });
+
   it("keeps a resumed task working when the bot moves it on after the restart", () => {
     const dataDir = join(root, "data");
     const first = harness(dataDir);

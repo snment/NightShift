@@ -77,7 +77,7 @@ export interface RoutineResearch {
 /** What a restart found of a task a bot was working on. */
 export interface RestartedTask {
   task: WorkTask;
-  outcome: "redispatched" | "interrupted";
+  outcome: "routed" | "redispatched" | "interrupted";
 }
 
 export interface TaskPatch {
@@ -92,6 +92,8 @@ export interface TaskPatch {
 const FILE_LINE = /[\w./\\-]+\.[\w]+:\d+/;
 
 const touchesTeamMemory = (paths: readonly string[]) => paths.some((path) => path.replace(/\\/g, "/").replace(/^\.\//, "") === TEAM_MEMORY_FILE);
+
+const isUnrouted = (task: WorkTask) => task.status === "To Do" && !task.owner_bot_id && (routingTag(task) === "research" || routingTag(task) === "dev");
 
 const memoryProposal = (project: string, keeper: string | undefined) => `If the team should remember something from it, write the whole new ${TEAM_MEMORY_FILE} to a file outside the repository and propose it with: node --experimental-strip-types server/openmausbot.ts team-memory propose --project ${project} --file NEW_MEMORY_FILE --summary "one line"${keeper ? ` --as-bot ${keeper}` : ""}. The person sees the exact diff and approves it before it is saved; never write ${TEAM_MEMORY_FILE} yourself and never put a key, token or password in it.`;
 
@@ -142,10 +144,10 @@ export class ReviewLoop {
   }
 
   /** Starts a research-only task for one routine run. A run that already started one (a restart reran its start)
-   * gets that task back, so a run never makes two. */
+   * gets that task back, so a run never makes two; one the restart caught before it was handed out is handed out now. */
   createForRoutine(input: RoutineResearch): WorkTask {
     const existing = this.deps.store.list().find((task) => task.routine_run_id === input.runId);
-    if (existing) return existing;
+    if (existing) return isUnrouted(existing) ? this.route(existing) : existing;
     if (!input.title.trim()) throw new LoopError(400, "the routine names no research title");
     if (!input.project.trim()) throw new LoopError(400, "the routine's bot has no project folder");
     const actor: LoopActor = SYSTEM;
@@ -166,10 +168,16 @@ export class ReviewLoop {
   }
 
   /** After a restart: a task a bot was working on gets its turn again, told that it was cut off, once. A second
-   * restart on the same hand-over blocks it as interrupted, so nothing loops and nothing is silently lost. */
+   * restart on the same hand-over blocks it as interrupted, so nothing loops and nothing is silently lost. A task
+   * the restart caught between being saved and being handed out is handed out. */
   recoverAfterRestart(busy: (botId: string) => boolean): RestartedTask[] {
     const found: RestartedTask[] = [];
     for (const task of this.deps.store.list()) {
+      if (isUnrouted(task)) {
+        this.post(task, `NightShift restarted before "${task.title}" (${task.slug}) was handed out; handing it out now.`);
+        found.push({ task: this.route(task), outcome: "routed" });
+        continue;
+      }
       const working = (task.status === "Working" || (task.status === "Needs Review" && task.tags.includes("review"))) && task.owner_bot_id;
       if (!working) continue;
       const role = this.roleOf(task);
