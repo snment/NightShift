@@ -13,3 +13,5 @@ Diff-only review:
 Report: findings by `path:line`, each with a one-line reason, and a verdict (approve / changes requested). State which files you read.
 
 Live search: you do not need it for a diff review. Only if a review question needs a live doc check, the user can enable Codex live search (`web_search = "live"` in `~/.codex/config.toml`, or `codex --search`). Live search returns snippets only; open the full page with a fetch tool before relying on it.
+
+Never edit `MEMORY.md`. Keeper owns it and proposes every change for the person to approve; the review loop refuses a branch that changes it.

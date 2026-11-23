@@ -4,9 +4,11 @@ import { join } from "node:path";
 import type { AdminActionRow } from "../admin-activity.ts";
 import type { DecisionRow } from "../decision-log.ts";
 import type { MausColor, Message, OptionCardData } from "../store.ts";
-import { taskAuditRow } from "./audit.ts";
+import { memoryAuditRow, taskAuditRow } from "./audit.ts";
 import { localGit, type TaskGit } from "./git.ts";
-import { ReviewLoop } from "./loop.ts";
+import { LoopError, ReviewLoop, type RoutineResearch } from "./loop.ts";
+import { parseRoutineResearch } from "./routine-research.ts";
+import { MEMORY_APPROVAL_TOOL, MEMORY_PROPOSALS_FILE, TeamMemory, type MemoryProposal } from "./memory.ts";
 import type { DiffApproval, ReviewRole, TurnUsage, WorkTask } from "./model.ts";
 import { WorkTaskStore } from "./store.ts";
 
@@ -49,6 +51,76 @@ export function diffApprovalCard(task: WorkTask, approval: DiffApproval, diff: s
       requestType: "permission",
       tool: DIFF_APPROVAL_TOOL,
       fixedOptions: true,
+    },
+  };
+}
+
+export function memoryApprovalCard(proposal: MemoryProposal): { text: string; card: OptionCardData } {
+  const shown = proposal.diff.length > CARD_DIFF_CHARS ? `${proposal.diff.slice(0, CARD_DIFF_CHARS)}\n… (${proposal.diff.length - CARD_DIFF_CHARS} more characters; openmausbot team-memory show ${proposal.id})` : proposal.diff;
+  return {
+    text: `Keeper proposes this change to MEMORY.md in ${proposal.project} (sha256 ${proposal.proposed_sha256}):${proposal.summary ? `\n${proposal.summary}` : ""}\n\n\`\`\`diff\n${shown}\n\`\`\``,
+    card: {
+      title: "Save this change to MEMORY.md?",
+      subtitle: `Nothing is written until you approve. sha256 ${proposal.proposed_sha256.slice(0, 16)}.`,
+      options: ["Approve", "Deny"],
+      requestId: proposal.id,
+      requestType: "permission",
+      tool: MEMORY_APPROVAL_TOOL,
+      fixedOptions: true,
+    },
+  };
+}
+
+export interface NightShift {
+  loop: ReviewLoop;
+  memory: TeamMemory;
+  /** An answer to one of the loop's or memory's cards, or null for any other card. */
+  resolveCard(threadId: string, requestId: string, behavior: string, person: string): { status: number; body: unknown } | null;
+  /** A routine run's turn: a research routine of Keeper's starts a review-loop task and gets a one-line prompt back;
+   * any other routine gets null and runs as it is. */
+  routineTurn(run: { id: string; routineId: string; routineName: string; botId: string }, prompt: string): string | null;
+}
+
+export function createNightShift(deps: NightShiftLoopDeps & { cwdOf(botId: string): string | undefined }): NightShift {
+  const loop = createNightShiftLoop(deps);
+  const keeper = () => deps.store.bots.find((bot) => bot.name === ROLE_BOT_NAMES.keeper);
+  const from = () => { const k = keeper(); return k ? { from: { botId: k.id, name: k.name, color: k.color } } : {}; };
+  const memory = new TeamMemory({
+    file: join(deps.dataDir, MEMORY_PROPOSALS_FILE),
+    keeper: () => keeper()?.id,
+    audit: (event) => deps.audit(memoryAuditRow(event)),
+    card: (proposal) => {
+      const threadId = keeper()?.threadId;
+      if (!threadId) return null;
+      const shown = memoryApprovalCard(proposal);
+      deps.store.appendMessage(threadId, { role: "bot", kind: "options", text: shown.text, card: shown.card, ...from() });
+      const k = keeper();
+      deps.decide({ threadId, requestId: proposal.id, ...(k ? { botId: k.id, botName: k.name } : {}), tool: MEMORY_APPROVAL_TOOL,
+        summary: shown.card.title, decision: "card-shown", source: "question" });
+      return threadId;
+    },
+    post: (proposal, text) => { if (proposal.thread_id) deps.store.appendMessage(proposal.thread_id, { role: "bot", kind: "text", text, ...from() }); },
+  });
+  return {
+    loop,
+    memory,
+    resolveCard: (threadId, requestId, behavior, person) =>
+      memory.resolveCard(threadId, requestId, behavior, person) ?? loop.resolveCard(threadId, requestId, behavior, person),
+    routineTurn: (run, prompt) => {
+      const spec = parseRoutineResearch(prompt);
+      if (!spec || run.botId !== keeper()?.id) return null;
+      const input: RoutineResearch = {
+        routineId: run.routineId, routineName: run.routineName, runId: run.id, title: `${spec.title} ${new Date().toISOString().slice(0, 10)}`,
+        description: spec.description, project: deps.cwdOf(run.botId) ?? "", ...(spec.base ? { base_branch: spec.base } : {}),
+      };
+      try {
+        const task = loop.createForRoutine(input);
+        return `The routine "${run.routineName}" started research task "${task.title}" (${task.slug}) for the Researcher; it is ${task.status}${task.blocked_reason ? `: ${task.blocked_reason}` : ""}. Say so in one line in this chat and do nothing else. You will be handed the packet when it is done.`;
+      } catch (error) {
+        const reason = error instanceof LoopError ? error.message : String(error);
+        console.warn(`[review-loop] routine ${run.routineId} could not start its research task: ${reason}`);
+        return `The routine "${run.routineName}" could not start its research task: ${reason}. Tell the person in one line and do nothing else.`;
+      }
     },
   };
 }

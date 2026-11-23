@@ -648,7 +648,7 @@ import { createThreadRoutes } from "./routes/threads.ts";
 import { createWebhookRoutes } from "./routes/webhooks.ts";
 import { withScopeHint } from "./connector-scope-hint.ts";
 import { connectorFileDeps, connectorFileScope, prepareConnectorFiles, withMissingFileHint } from "./connector-files.ts";
-import { createConnectorCards } from "./host/connector-cards.ts"; import { bookTaskTurnUsage, createNightShiftLoop } from "./review-loop/host.ts"; import { createWorkTaskRoutes } from "./review-loop/routes.ts";
+import { createConnectorCards } from "./host/connector-cards.ts"; import { bookTaskTurnUsage, createNightShift } from "./review-loop/host.ts"; import { createWorkTaskRoutes } from "./review-loop/routes.ts";
 import { createLoginMailCodes } from "./host/login-mail-codes.ts";
 import { onThreadSeen, personAsks as personAskAt, sawThread } from "./thread-presence.ts"; import { createWarmSummaryHost, HARNESS_IDLE_FRACTION } from "./host/warm-summary-host.ts";
 
@@ -1351,7 +1351,7 @@ function operatorPrices(): PriceList | null {
   return entitled("billing") && cfg.billing?.prices && Object.keys(cfg.billing.prices).length ? cfg.billing.prices : null;
 }
 
-let bookReviewLoopTurn: (row: UsageRow) => void = () => undefined;
+let bookReviewLoopTurn: (row: UsageRow) => void = () => undefined; let nightShiftRoutineTurn: (run: { id: string; routineId: string; routineName: string; botId: string }, prompt: string) => string | null = () => null;
 const attributeUsage = createUsageAttribution({ section: (botId) => store.bot(botId)?.section, threadTrigger: (threadId) => turnTriggers.get(threadId), routineWriter: (id) => { const key = cloudRoutineAuthors?.writer(id); return key ? teamOwners.people?.list().find((one) => personKey({ id: "", email: one.email }) === key)?.email : undefined; } }); const usageCapGate = createUsageCapGate({ dataDir: DATA_DIR, caps: () => cfg.usageCaps, botName: (botId) => store.bot(botId)?.name, language: () => appLanguage(), log: (line) => console.log(line), notice: (aboutBotId, title, body) => { const bot = store.bot(aboutBotId ?? "") ?? store.bots[0]; if (bot) broadcast({ kind: "notify", notification: logNotification(buildSpendNotification({ id: bot.id, name: bot.name }, bot.threadId, { title, body })) }, { adminOnly: true }); } }); const threadStanding = (botId: string, threadId: string): ThreadStanding => { const owner = directRequestOwners.get(threadId); return { unattended: isUnattended(botId, threadId), automation: owner?.automation, origin: owner?.origin?.kind }; }; const routineTriggerOf = (threadId: string) => { const run = activeRoutineRunForThread(threadId); return run ? run.triggerSource ?? (run.manual ? "manual" : "schedule") : undefined; }; function bookTurnUsage(row: Omit<UsageRow, "at" | "costSource">, tokensReported = true, notificationThreadId = row.threadId): void {
   const cost = tokensReported || row.costUsd !== null ? ledgerCost(row, operatorPrices()) : { costUsd: null };
   const booked = attributeUsage({ ...row, ...cost, ...usageTrace.settle(row.threadId), at: new Date().toISOString() });
@@ -8805,7 +8805,10 @@ routines = new RoutineManager({
     }
   },
   startTurn: async (botId, threadId, prompt, runOn, triggerSource, onDispatchError, runId) => {
-    if (!companyShutdown) await startTurn(botId, prompt, { threadId, runOn, automationSource: triggerSource, automationRunId: runId, onDispatchError });
+    const run = routines?.listRuns().find((candidate) => candidate.id === runId);
+    const definition = run ? routines?.listRoutines().find((routine) => routine.id === run.routineId)?.prompt ?? run.prompt : undefined;
+    const research = run && definition !== undefined ? nightShiftRoutineTurn({ id: run.id, routineId: run.routineId, routineName: run.routineName, botId }, definition) : null;
+    if (!companyShutdown) await startTurn(botId, research ?? prompt, { threadId, runOn, automationSource: triggerSource, automationRunId: runId, onDispatchError });
   },
   startGoal: async (groupId, threadId, prompt, coordinatorBotId, runId, _onDispatchError) => {
     if (!groupId) {
@@ -12044,7 +12047,7 @@ ROUTES.push(createBotMessageRoutes({
   routines: () => routines,
   fromPhone: phones.fromPhone, notePhoneSend: phones.noteSend,
   desktopManaged: DESKTOP_MANAGED, cloudHome: Boolean(CLOUD_HOME), DirectSendRefused,
-  acceptDirectSend, directSendRefusal, startTurn, usageTriggerFor, messageSender, cloudGuestSendRefusal, cloudThreadRefusal, runOwners, runActor, resolveAccessRequest: (threadId, requestId, behavior, message) => reviewLoop.resolveCard(threadId, requestId, behavior, "approval card") ?? lendingLifts?.resolve(threadId, requestId, behavior) ?? accessRequests.resolve(threadId, requestId, behavior, message), relayRefusal: CLOUD_TEAM ? (bot, email) => relayedSendRefusal(bot, email, Boolean(email && teamOwners.people?.list().some((one) => one.email === email && one.role !== "member"))) : undefined,
+  acceptDirectSend, directSendRefusal, startTurn, usageTriggerFor, messageSender, cloudGuestSendRefusal, cloudThreadRefusal, runOwners, runActor, resolveAccessRequest: (threadId, requestId, behavior, message) => nightShift.resolveCard(threadId, requestId, behavior, "approval card") ?? lendingLifts?.resolve(threadId, requestId, behavior) ?? accessRequests.resolve(threadId, requestId, behavior, message), relayRefusal: CLOUD_TEAM ? (bot, email) => relayedSendRefusal(bot, email, Boolean(email && teamOwners.people?.list().some((one) => one.email === email && one.role !== "member"))) : undefined,
   noAiRefusal: noAiNotice.refusal, cardAnswerRefusal, commandRememberRefusal, requestBehavior, requestedTaskBot, botForThread, threadBusy,
   botAtThreadCapacity, parksBehindCoordination, activeGroupTurnForBot, runningTurnInstance, engineSteersImages, resolveReplyTarget,
   turnSelection, policyModelRefusal, clearUnattended, drainQueuedSends, answeringCardAs, resolveAndSendTrust, resolveAndSendTeamSetup, resolveAndSendMcp,
@@ -12054,7 +12057,7 @@ ROUTES.push(createBotMessageRoutes({
   goals: oneOnOneGoals, inboxReply: teamMessages.replyIn, typedCardAnswer: askCards.typed, ...(CLOUD_TEAM ? { teamAiOwnerName: () => teamAiOwner(teamOwners.people?.list() ?? [], teamHost.personName)?.name ?? "" } : {}),
   relayedReaction: (threadId, messageId, person, emoji) => void store.setReaction(threadId, messageId, relayedPersonKey(person),
     { emoji, name: person.name ?? person.email, at: Date.now() }),
-})); const reviewLoop = createNightShiftLoop({ dataDir: DATA_DIR, store, audit: (row) => appendAdminAction(DATA_DIR, row), decide: (row) => appendDecision(DATA_DIR, row), send: (botId, threadId, text) => acceptDirectSend({ botId, threadId, text, trigger: { kind: "bot" }, personPresent: false }) }); ROUTES.push(createWorkTaskRoutes({ loop: reviewLoop, botExists: (id) => Boolean(store.bot(id)), person: (auth) => (auth.kind === "session" ? auth.session.email ?? auth.session.label : "loopback") })); bookReviewLoopTurn = (row) => { bookTaskTurnUsage(reviewLoop, store, row); };
+})); const nightShift = createNightShift({ dataDir: DATA_DIR, store, cwdOf: (botId) => store.bot(botId)?.cwd ?? undefined, audit: (row) => appendAdminAction(DATA_DIR, row), decide: (row) => appendDecision(DATA_DIR, row), send: (botId, threadId, text) => acceptDirectSend({ botId, threadId, text, trigger: { kind: "bot" }, personPresent: false }) }); const reviewLoop = nightShift.loop; nightShiftRoutineTurn = nightShift.routineTurn; setTimeout(() => { try { nightShift.loop.recoverAfterRestart((botId) => { const bot = store.bot(botId); return Boolean(bot && threadBusy(botId, bot.threadId)); }); } catch (error) { console.warn(`[review-loop] restart recovery failed: ${error instanceof Error ? error.message : String(error)}`); } }, 60_000).unref(); ROUTES.push(createWorkTaskRoutes({ loop: reviewLoop, memory: nightShift.memory, botExists: (id) => Boolean(store.bot(id)), person: (auth) => (auth.kind === "session" ? auth.session.email ?? auth.session.label : "loopback") })); bookReviewLoopTurn = (row) => { bookTaskTurnUsage(reviewLoop, store, row); };
 const liveRoots = (threadId: string, botId: string | undefined) => { const bot = botId ? store.bot(botId) : store.botByThread(threadId); return bot ? messageFileRootsForThread(bot.id, threadId).filter((root) => root !== ATTACHMENTS_DIR) : null; }; const chatApps = createChatApps({ store, dataDir: DATA_DIR, liveRows: liveAppRows, liveRoots, paused: () => workspaceMaintenance.active || moveFreeze.frozen() });
 const chatAppsMcp = createChatAppsMcp({ store, apps: chatApps, dataDir: DATA_DIR, keys: mcpKeys, storedServers: () => cfg.mcpServers ?? {}, mountedServers: (bot) => teamConnections.engineMcp(bot), personMcp: teamConnections.personMcp, probeAs: (server) => mcpServersHost.probeAs(server), oauth: mcpOAuth });
 ROUTES.push(createChatAppRoutes({ store, apps: chatApps, threadRefusal: cloudThreadRefusal, mcpRpc: chatAppsMcp.rpc, threadVisible: (auth, threadId) => (auth.kind !== "session" || sessions.isLive(auth.session.id)) && visibleTo(viewerFor(auth)).thread(threadId) }));

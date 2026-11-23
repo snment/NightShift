@@ -130,6 +130,10 @@ const VERBS: Record<string, { options: ParseArgsOptionsConfig; positionals: numb
   },
   "task request-approval": { options: { action: { type: "string" }, "as-bot": { type: "string" } }, positionals: 1 },
   "task approve-diff": { options: { request: { type: "string" }, sha256: { type: "string" }, approve: { type: "boolean" }, deny: { type: "boolean" } }, positionals: 1 },
+  "team-memory proposals": { options: {}, positionals: 0 },
+  "team-memory propose": { options: { project: { type: "string" }, file: { type: "string" }, summary: { type: "string" }, "as-bot": { type: "string" } }, positionals: 0 },
+  "team-memory show": { options: {}, positionals: 1 },
+  "team-memory decide": { options: { sha256: { type: "string" }, approve: { type: "boolean" }, deny: { type: "boolean" } }, positionals: 1 },
 };
 
 export const HEADLESS_VERBS: ReadonlySet<string> = new Set(Object.keys(VERBS).map((verb) => verb.split(" ")[0]!));
@@ -137,7 +141,7 @@ export const HEADLESS_VERBS: ReadonlySet<string> = new Set(Object.keys(VERBS).ma
 /** Verbs that change something; control-omb refuses them on a discovered server. */
 export const MUTATING_VERBS: ReadonlySet<string> = new Set([
   "send", "send-channel", "run", "interrupt", "new-bot", "new-channel", "set-model", "edit", "team apply", "engine set", "token create", "token revoke",
-  "task create", "task update", "task transition", "task request-approval", "task approve-diff",
+  "task create", "task update", "task transition", "task request-approval", "task approve-diff", "team-memory propose", "team-memory decide",
 ]);
 
 export type Flags = Record<string, string | boolean | string[] | undefined>;
@@ -148,7 +152,7 @@ export interface ParsedCommand {
   positionals: string[];
 }
 
-const SUBCOMMANDS = new Map([["team", ["apply", "export"]], ["engine", ["set", "list"]], ["token", ["create", "list", "revoke"]], ["task", ["create", "show", "update", "transition", "request-approval", "approve-diff"]]]);
+const SUBCOMMANDS = new Map([["team", ["apply", "export"]], ["engine", ["set", "list"]], ["token", ["create", "list", "revoke"]], ["task", ["create", "show", "update", "transition", "request-approval", "approve-diff"]], ["team-memory", ["proposals", "propose", "show", "decide"]]]);
 
 /** Strict: an unknown flag or a missing value is a usage error (exit 2). */
 export function parseCommand(argv: readonly string[]): ParsedCommand {

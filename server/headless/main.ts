@@ -10,7 +10,7 @@ import { exportVerb } from "./export.ts";
 import { Output, processIo, type HeadlessIo } from "./output.ts";
 import { runVerb, waitVerb } from "./run.ts";
 import { teamApplyVerb, teamExportVerb } from "./team-apply.ts";
-import { tasksVerb } from "./tasks.ts";
+import { tasksVerb, teamMemoryVerb } from "./tasks.ts";
 import { tokenVerb } from "./token.ts";
 
 const T = "TARGET is a bot or room by name or id, or --bot ID, --channel ID, --thread ID; --task ID picks one of its conversations.";
@@ -105,6 +105,12 @@ openmausbot doctor --host [--data-dir DIR] [--port 8799] [--domain HOST]
   stop [--reason R] | resume [--reset-rounds] | reassign --bot ID [--role R] | usage --role R --input-tokens N --output-tokens N`,
   "task request-approval": "openmausbot task request-approval ID [--action push|merge|pr|deploy]\n  Ask a person to approve the exact diff of a Done task's branch. Nothing is pushed or merged.",
   "task approve-diff": "openmausbot task approve-diff ID --request ID --sha256 SHA (--approve | --deny)\n  A person's answer for the exact diff named by its sha256. It records the answer; the person pushes or merges.",
+  "team-memory": "openmausbot team-memory proposals | propose | show | decide   (see help team-memory propose, …)",
+  "team-memory proposals": "openmausbot team-memory proposals\n  Keeper's proposed MEMORY.md changes and what became of each.",
+  "team-memory propose": `openmausbot team-memory propose --project PATH --file NEW_MEMORY_FILE [--summary S] [--as-bot KEEPER_ID]
+  Propose the whole new MEMORY.md. The person sees the exact diff on a card; nothing is written until they approve it.`,
+  "team-memory show": "openmausbot team-memory show ID\n  One proposal: its diff, its sha256 and its answer.",
+  "team-memory decide": "openmausbot team-memory decide ID --sha256 SHA (--approve | --deny)\n  A person's answer for the exact change named by its sha256. Approving writes MEMORY.md.",
 };
 
 export interface HeadlessOptions {
@@ -125,6 +131,7 @@ const VERBS: Record<string, (ctx: VerbContext) => Promise<VerbOutcome>> = {
   "token create": tokenVerb, "token list": tokenVerb, "token revoke": tokenVerb,
   tasks: tasksVerb, "task create": tasksVerb, "task show": tasksVerb, "task update": tasksVerb, "task transition": tasksVerb,
   "task request-approval": tasksVerb, "task approve-diff": tasksVerb,
+  "team-memory proposals": teamMemoryVerb, "team-memory propose": teamMemoryVerb, "team-memory show": teamMemoryVerb, "team-memory decide": teamMemoryVerb,
 };
 
 async function execute(argv: readonly string[], options: HeadlessOptions, io: HeadlessIo): Promise<{ outcome: VerbOutcome; output: Output; client?: HeadlessClient }> {

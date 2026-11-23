@@ -1,10 +1,12 @@
 import type { RequestAuth } from "../request-auth.ts";
 import { PASS, type RouteHandler } from "../routes/table.ts";
 import { LoopError, type LoopActor, type ReviewLoop, type TransitionEvent } from "./loop.ts";
+import type { TeamMemory } from "./memory.ts";
 import type { DiffAction } from "./model.ts";
 
 export interface WorkTaskRouteDeps {
   loop: ReviewLoop;
+  memory?: TeamMemory;
   botExists(id: string): boolean;
   /** The person behind a request, for the audit log. */
   person(auth: RequestAuth): string;
@@ -14,6 +16,8 @@ const TASK = /^\/api\/tasks\/([\w-]+)$/;
 const TRANSITION = /^\/api\/tasks\/([\w-]+)\/transition$/;
 const REQUEST_APPROVAL = /^\/api\/tasks\/([\w-]+)\/request-approval$/;
 const APPROVE_DIFF = /^\/api\/tasks\/([\w-]+)\/approve-diff$/;
+const PROPOSAL = /^\/api\/team-memory\/proposals\/([\w-]+)$/;
+const DECIDE = /^\/api\/team-memory\/proposals\/([\w-]+)\/decide$/;
 
 const text = (value: unknown): string | undefined => (typeof value === "string" ? value : undefined);
 
@@ -33,8 +37,30 @@ export function createWorkTaskRoutes(deps: WorkTaskRouteDeps): RouteHandler {
     return { kind: "person", id: deps.person(auth) };
   };
   return async ({ req, res, path, method, auth, json, readBody }) => {
-    if (path !== "/api/tasks" && !path.startsWith("/api/tasks/")) return PASS;
+    const memoryPath = path === "/api/team-memory/proposals" || path.startsWith("/api/team-memory/proposals/");
+    if (path !== "/api/tasks" && !path.startsWith("/api/tasks/") && !(memoryPath && deps.memory)) return PASS;
     try {
+      if (memoryPath && deps.memory) {
+        const memory = deps.memory;
+        if (path === "/api/team-memory/proposals" && method === "GET") return json(res, 200, { proposals: memory.list() });
+        if (path === "/api/team-memory/proposals" && method === "POST") {
+          const body = (await readBody(req)) as Record<string, unknown>;
+          const proposal = memory.propose({ project: text(body.project) ?? "", text: text(body.text) ?? "", ...(text(body.summary) ? { summary: text(body.summary)! } : {}) }, actorOf(auth, body));
+          return json(res, 201, { proposal });
+        }
+        let found = PROPOSAL.exec(path);
+        if (found && method === "GET") return json(res, 200, { proposal: memory.get(found[1]!) });
+        found = DECIDE.exec(path);
+        if (found && method === "POST") {
+          const body = (await readBody(req)) as Record<string, unknown>;
+          const decision = body.decision === "approved" || body.decision === "denied" ? body.decision : null;
+          if (!decision) return json(res, 400, { error: "decision must be approved or denied" });
+          const sha = text(body.proposed_sha256);
+          if (!sha) return json(res, 400, { error: "proposed_sha256 is required: approve the exact change you read" });
+          return json(res, 200, { proposal: memory.decide(found[1]!, decision, sha, actorOf(auth, body)) });
+        }
+        return json(res, 405, { error: `${method} ${path} is not a team memory route` });
+      }
       if (path === "/api/tasks" && method === "GET") return json(res, 200, { tasks: loop.list() });
       if (path === "/api/tasks" && method === "POST") {
         const body = (await readBody(req)) as Record<string, unknown>;

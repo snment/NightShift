@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { EXIT, flag, usageError } from "./args.ts";
@@ -103,6 +104,46 @@ export async function tasksVerb(ctx: VerbContext): Promise<VerbOutcome> {
     const request = flag(ctx.flags, "request"), sha = flag(ctx.flags, "sha256");
     if (!request || !sha) throw usageError("task approve-diff needs --request ID and --sha256 of the diff you read (task show prints both)");
     return done((await call(ctx, `/api/tasks/${needId(ctx)}/approve-diff`, "POST", { request_id: request, diff_sha256: sha, decision: approve ? "approved" : "denied" })).task);
+  }
+  throw usageError(`unknown verb ${ctx.verb}`);
+}
+
+function proposalLines(proposal: Rec, withDiff: boolean): string[] {
+  return [
+    `${proposal.id}  [${proposal.decision}]  ${proposal.project}  sha256 ${proposal.proposed_sha256}${proposal.summary ? `  ${proposal.summary}` : ""}`,
+    ...(withDiff ? String(proposal.diff ?? "").split("\n").map((row) => `  ${row}`) : []),
+  ];
+}
+
+export async function teamMemoryVerb(ctx: VerbContext): Promise<VerbOutcome> {
+  const shown = (proposal: Rec, withDiff = true): VerbOutcome => ({ result: { proposal }, exitCode: EXIT.done, human: proposalLines(proposal, withDiff) });
+  if (ctx.verb === "team-memory proposals") {
+    const { proposals = [] } = await call(ctx, "/api/team-memory/proposals");
+    return { result: { proposals }, exitCode: EXIT.done, human: proposals.length ? proposals.flatMap((one: Rec) => proposalLines(one, false)) : ["No memory proposals."] };
+  }
+  if (ctx.verb === "team-memory propose") {
+    const project = flag(ctx.flags, "project"), file = flag(ctx.flags, "file");
+    if (!project || !file) throw usageError("team-memory propose needs --project PATH and --file NEW_MEMORY_FILE (the whole new MEMORY.md)");
+    let text: string;
+    try {
+      text = readFileSync(resolve(file), "utf8");
+    } catch (error) {
+      throw usageError(`${file} could not be read (${(error as NodeJS.ErrnoException).code ?? "error"})`);
+    }
+    const { proposal } = await call(ctx, "/api/team-memory/proposals", "POST", {
+      project: resolve(project), text, ...(flag(ctx.flags, "summary") ? { summary: flag(ctx.flags, "summary") } : {}), ...asBot(ctx),
+    });
+    return { ...shown(proposal), human: [...proposalLines(proposal, true), "Waiting for a person to approve it; MEMORY.md is unchanged until then."] };
+  }
+  const id = ctx.positionals[0]?.trim();
+  if (!id) throw usageError(`${ctx.verb} needs a proposal id`, "openmausbot team-memory proposals lists them");
+  if (ctx.verb === "team-memory show") return shown((await call(ctx, `/api/team-memory/proposals/${encodeURIComponent(id)}`)).proposal);
+  if (ctx.verb === "team-memory decide") {
+    const approve = ctx.flags.approve === true, deny = ctx.flags.deny === true;
+    if (approve === deny) throw usageError("say --approve or --deny");
+    const sha = flag(ctx.flags, "sha256");
+    if (!sha) throw usageError("team-memory decide needs --sha256 of the change you read (team-memory show prints it)");
+    return shown((await call(ctx, `/api/team-memory/proposals/${encodeURIComponent(id)}/decide`, "POST", { proposed_sha256: sha, decision: approve ? "approved" : "denied" })).proposal, false);
   }
   throw usageError(`unknown verb ${ctx.verb}`);
 }

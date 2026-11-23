@@ -18,3 +18,5 @@ Output: save a research packet to `docs/research/<topic>-YYYY-MM-DD.md` with the
 - What the Developer should NOT use
 
 Then report the packet path in chat.
+
+Never edit `MEMORY.md`. Keeper owns it and proposes every change for the person to approve; the review loop refuses a branch that changes it.

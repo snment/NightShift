@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { diffGate, diffSha256, type TaskGit } from "./git.ts";
 import { handoffPathFor, validateHandoff, validateResearch } from "./handoff.ts";
 import {
-  DIFF_ACTIONS, MAX_REVIEW_ROUNDS, REVIEW_ROLES, routingTag, withTag, isWorkTaskStatus,
+  DIFF_ACTIONS, MAX_REVIEW_ROUNDS, REVIEW_ROLES, ROUTINE_TAG, TEAM_MEMORY_FILE, routingTag, withTag, isWorkTaskStatus,
   type DiffAction, type DiffApproval, type ReviewRole, type RoleUsage, type TurnUsage, type UsageRole, type WorkTask,
 } from "./model.ts";
 import type { NewWorkTask, WorkTaskStore } from "./store.ts";
@@ -17,7 +17,8 @@ export type TaskAuditAction =
   | "task.created" | "task.updated" | "task.assigned" | "task.branch-created" | "task.research-written" | "task.handoff-written"
   | "task.review-started" | "task.review-approved" | "task.review-changes" | "task.review-cap" | "task.split-flagged"
   | "task.blocked" | "task.resumed" | "task.reassigned" | "task.usage"
-  | "task.diff-approval-requested" | "task.diff-approval-decided" | "task.deleted";
+  | "task.diff-approval-requested" | "task.diff-approval-decided" | "task.deleted"
+  | "task.routine-started" | "task.redispatched" | "task.interrupted";
 
 export interface TaskAuditEvent {
   action: TaskAuditAction;
@@ -61,6 +62,24 @@ export type TransitionEvent =
   | { event: "reassign"; bot_id: string; role?: ReviewRole }
   | { event: "usage"; role: UsageRole; input_tokens: number; output_tokens: number };
 
+/** One run of a routine that asks the loop for a research packet. */
+export interface RoutineResearch {
+  routineId: string;
+  routineName: string;
+  runId: string;
+  title: string;
+  description: string;
+  project: string;
+  base_branch?: string;
+  room_id?: string | null;
+}
+
+/** What a restart found of a task a bot was working on. */
+export interface RestartedTask {
+  task: WorkTask;
+  outcome: "redispatched" | "interrupted";
+}
+
 export interface TaskPatch {
   title?: string;
   description?: string;
@@ -71,6 +90,10 @@ export interface TaskPatch {
 }
 
 const FILE_LINE = /[\w./\\-]+\.[\w]+:\d+/;
+
+const touchesTeamMemory = (paths: readonly string[]) => paths.some((path) => path.replace(/\\/g, "/").replace(/^\.\//, "") === TEAM_MEMORY_FILE);
+
+const memoryProposal = (project: string, keeper: string | undefined) => `If the team should remember something from it, write the whole new ${TEAM_MEMORY_FILE} to a file outside the repository and propose it with: node --experimental-strip-types server/openmausbot.ts team-memory propose --project ${project} --file NEW_MEMORY_FILE --summary "one line"${keeper ? ` --as-bot ${keeper}` : ""}. The person sees the exact diff and approves it before it is saved; never write ${TEAM_MEMORY_FILE} yourself and never put a key, token or password in it.`;
 
 function snapshot(task: WorkTask): TaskAuditEvent["task"] {
   const { id, slug, title, status, tags, owner_bot_id, review_round, branch } = task;
@@ -116,6 +139,67 @@ export class ReviewLoop {
     this.audit("task.created", task, actor, { project: task.project, base: task.base_branch });
     this.post(task, `New task "${task.title}" (${task.slug}) [${task.status}${task.tags.length ? ` + ${task.tags.join(", ")}` : ""}]`);
     return this.route(task);
+  }
+
+  /** Starts a research-only task for one routine run. A run that already started one (a restart reran its start)
+   * gets that task back, so a run never makes two. */
+  createForRoutine(input: RoutineResearch): WorkTask {
+    const existing = this.deps.store.list().find((task) => task.routine_run_id === input.runId);
+    if (existing) return existing;
+    if (!input.title.trim()) throw new LoopError(400, "the routine names no research title");
+    if (!input.project.trim()) throw new LoopError(400, "the routine's bot has no project folder");
+    const actor: LoopActor = SYSTEM;
+    let task: WorkTask;
+    try {
+      task = this.deps.store.create({
+        title: input.title, description: input.description, project: input.project, tags: ["research", ROUTINE_TAG],
+        routine_run_id: input.runId, created_by: `routine:${input.routineId}`,
+        ...(input.base_branch ? { base_branch: input.base_branch } : {}), ...(input.room_id ? { room_id: input.room_id } : {}),
+      });
+    } catch (error) {
+      throw new LoopError(409, (error as Error).message);
+    }
+    this.audit("task.created", task, actor, { project: task.project, base: task.base_branch });
+    this.audit("task.routine-started", task, actor, { routineId: input.routineId, routineName: input.routineName, runId: input.runId });
+    this.post(task, `Routine "${input.routineName}" started research task "${task.title}" (${task.slug}) for Researcher.`);
+    return this.route(task);
+  }
+
+  /** After a restart: a task a bot was working on gets its turn again, told that it was cut off, once. A second
+   * restart on the same hand-over blocks it as interrupted, so nothing loops and nothing is silently lost. */
+  recoverAfterRestart(busy: (botId: string) => boolean): RestartedTask[] {
+    const found: RestartedTask[] = [];
+    for (const task of this.deps.store.list()) {
+      const working = (task.status === "Working" || (task.status === "Needs Review" && task.tags.includes("review"))) && task.owner_bot_id;
+      if (!working) continue;
+      const role = this.roleOf(task);
+      if (!role || this.deps.roles()[role] !== task.owner_bot_id) continue;
+      if (busy(task.owner_bot_id!)) continue;
+      const handover = `${role}:${task.owner_bot_id}:${task.status}:${task.review_round}`;
+      if (task.restart_handover === handover) {
+        const next = this.block(task, "interrupted by a second NightShift restart before the bot finished; a person resumes it");
+        this.audit("task.interrupted", next, SYSTEM, { role });
+        this.tellKeeper(next, `Task "${next.title}" (${next.slug}) was cut off by a restart twice and is Blocked. Tell the person; they can resume it.`);
+        found.push({ task: next, outcome: "interrupted" });
+        continue;
+      }
+      const next = this.update(task, (t) => { t.restart_handover = handover; }, null);
+      this.audit("task.redispatched", next, SYSTEM, { role, botId: next.owner_bot_id });
+      this.post(next, `NightShift restarted while ${role} worked on "${next.title}"; handed it its turn again.`);
+      this.handOver(role, next.owner_bot_id!, next, `NightShift restarted while you worked on this task. Check what you already did before doing it again.
+
+${this.promptFor(role, next)}`);
+      found.push({ task: next, outcome: "redispatched" });
+    }
+    return found;
+  }
+
+  private roleOf(task: WorkTask): ReviewRole | null {
+    const tag = routingTag(task);
+    if (task.status === "Working" && tag === "research") return "researcher";
+    if (task.status === "Working" && tag === "dev") return "builder";
+    if (task.status === "Needs Review" && tag === "review") return "reviewer";
+    return null;
   }
 
   patch(id: string, patch: TaskPatch, actor: LoopActor): WorkTask {
@@ -232,6 +316,8 @@ export class ReviewLoop {
     if (text === null) throw new LoopError(400, `research packet ${path} was not found`);
     const check = validateResearch(text);
     if (!check.ok) throw new LoopError(400, `research packet rejected: ${check.problems.join("; ")}`);
+    this.refuseTeamMemory(task, actor);
+    if (task.tags.includes(ROUTINE_TAG)) return this.finishRoutineResearch(task, path, actor);
     const next = this.update(task, (t) => {
       t.research_path = path;
       t.tags = withTag(t.tags, "dev", "research");
@@ -253,6 +339,7 @@ export class ReviewLoop {
     if (text === null) throw new LoopError(400, `handoff packet ${handoff} was not found on ${task.branch}`);
     const check = validateHandoff(text);
     if (!check.ok) throw new LoopError(400, `handoff packet rejected: ${check.problems.join("; ")}`);
+    this.refuseTeamMemory(task, actor);
     const gate = diffGate(this.deps.git.diffStat(task.project, task.base_branch, task.branch));
     if (gate.stat.files === 0) throw new LoopError(409, `${task.branch} has no changes against ${task.base_branch}; commit on the branch first`);
     if (gate.over && !task.diff_override) return this.flagSplit(task, gate.reason!, gate.stat, actor);
@@ -267,6 +354,27 @@ export class ReviewLoop {
     return this.route(next);
   }
 
+  private finishRoutineResearch(task: WorkTask, path: string, actor: LoopActor): WorkTask {
+    const next = this.update(task, (t) => {
+      t.research_path = path;
+      t.tags = withTag(t.tags, null, "research");
+      t.status = "Done";
+      t.owner_bot_id = null;
+    }, null);
+    this.audit("task.research-written", next, actor, { researchPath: path, routine: true });
+    this.post(next, `Research packet ready: ${path}. Done; Keeper reports it.`);
+    this.tellKeeper(next, `Routine research task "${next.title}" (${next.slug}) is Done. The Researcher wrote ${path} in ${next.worktree_path ?? next.project}. Report it to the person in two or three lines: what was found and where the packet is. Nothing was pushed or merged. ${memoryProposal(next.project, this.deps.roles().keeper)}`);
+    return next;
+  }
+
+  /** Only Keeper proposes changes to the team memory, and only through an approval card: a bot's branch may not touch it. */
+  private refuseTeamMemory(task: WorkTask, actor: LoopActor): void {
+    if (actor.kind === "person") return;
+    if (touchesTeamMemory(this.deps.git.diffStat(task.project, task.base_branch, task.branch).paths)) {
+      throw new LoopError(403, `${task.branch} changes ${TEAM_MEMORY_FILE}; only Keeper proposes team memory changes, and a person approves them. Take ${TEAM_MEMORY_FILE} out of the branch.`);
+    }
+  }
+
   private approve(task: WorkTask, notes: string | undefined, actor: LoopActor): WorkTask {
     this.mustBe(task, "Needs Review", "review");
     this.mustPlay(task, "reviewer", actor);
@@ -278,7 +386,7 @@ export class ReviewLoop {
     }, null);
     this.audit("task.review-approved", next, actor, { round: next.review_round });
     this.post(next, `Reviewer approved "${next.title}" in round ${next.review_round}. Done; nothing was pushed or merged.`);
-    this.tellKeeper(next, `Task "${next.title}" (${next.slug}) is Done after ${next.review_round} review round(s) on ${next.branch}. Report it to the person; a push or merge still needs their approval of the exact diff.`);
+    this.tellKeeper(next, `Task "${next.title}" (${next.slug}) is Done after ${next.review_round} review round(s) on ${next.branch}. Report it to the person; a push or merge still needs their approval of the exact diff. ${memoryProposal(next.project, this.deps.roles().keeper)}`);
     return next;
   }
 

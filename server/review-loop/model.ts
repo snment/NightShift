@@ -4,6 +4,12 @@ export type WorkTaskStatus = typeof WORK_TASK_STATUSES[number];
 export const ROUTING_TAGS = ["research", "dev", "review"] as const;
 export type RoutingTag = typeof ROUTING_TAGS[number];
 
+/** A task a routine started: research only, so `research.done` ends it at Done and Keeper reports it. */
+export const ROUTINE_TAG = "routine";
+
+/** The team memory file at a repository's root. Only Keeper proposes changes to it, and only a person's approval writes it. */
+export const TEAM_MEMORY_FILE = "MEMORY.md";
+
 export const REVIEW_ROLES = ["researcher", "builder", "reviewer", "keeper"] as const;
 export type ReviewRole = typeof REVIEW_ROLES[number];
 export type UsageRole = Exclude<ReviewRole, "keeper">;
@@ -81,6 +87,10 @@ export interface WorkTask {
   blocked_reason: string | null;
   token_usage: Partial<Record<UsageRole, RoleUsage>>;
   approvals: DiffApproval[];
+  /** The routine run that started this task; absent on tasks a person or bot made. */
+  routine_run_id?: string | null;
+  /** The hand-over a restart already gave back once (`role:bot:status:round`); a second restart on it blocks the task. */
+  restart_handover?: string | null;
   created_by: string;
   created_at: number;
   updated_at: number;

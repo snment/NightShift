@@ -13,6 +13,7 @@ export interface NewWorkTask {
   room_id?: string | null;
   tags?: string[];
   base_branch?: string;
+  routine_run_id?: string;
   created_by: string;
 }
 
@@ -70,6 +71,7 @@ export class WorkTaskStore {
       blocked_reason: null,
       token_usage: {},
       approvals: [],
+      ...(input.routine_run_id ? { routine_run_id: input.routine_run_id } : {}),
       created_by: input.created_by,
       created_at: at,
       updated_at: at,

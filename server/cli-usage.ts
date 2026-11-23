@@ -16,6 +16,7 @@ export const HEADLESS_USAGE = `Drive a running workspace (scripts, CI, other age
   openmausbot connect URL --code CODE --out FILE              get a token for a workspace elsewhere
   openmausbot token create NAME --out FILE [--expires 90d]    a token for CI that ends on its date (token list, token revoke ID)
   openmausbot tasks | task create | task transition | task show   the review loop: research, build, diff-only review
+  openmausbot team-memory propose | proposals | decide            Keeper's MEMORY.md changes, saved only after approval
   openmausbot new-bot | new-channel | set-model | edit | mcp
 
   Server: --url URL (or OPENMAUSBOT_URL), --port N (or OMB_PORT), else this computer's.

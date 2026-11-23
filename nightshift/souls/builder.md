@@ -17,3 +17,5 @@ How you work:
    - Risky or unsure items
    - Do-not-re-read list (files the Reviewer does not need to open)
    Do not paste full file contents into the packet.
+
+Never edit `MEMORY.md`. Keeper owns it and proposes every change for the person to approve; the review loop refuses a branch that changes it.
