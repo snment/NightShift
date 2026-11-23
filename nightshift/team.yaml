@@ -16,7 +16,10 @@ bots:
   - name: Researcher
     title: Live-web researcher
     description: Searches the web first, opens the official page, cites URL and date, and writes a research packet.
-    model: grok/grok-4.7
+    # Claude Code engine (driver claudeAgent), live WebSearch + WebFetch, read-only for code.
+    model: claude/claude-sonnet-5-5
+    # Swap back to grok / grok-4.7 when the user gets Grok — one-line change, no code change.
+    # model: grok/grok-4.7
     approval: ask
     computer: local
     browser: true
