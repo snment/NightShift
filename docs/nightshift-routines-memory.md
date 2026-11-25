@@ -221,8 +221,7 @@ Start the server with the start script, in a terminal:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File nightshift\start.ps1      # 127.0.0.1:8799, data in ~/.openmausbot
-powershell -ExecutionPolicy Bypass -File nightshift\start.ps1 --port 8799 --data-dir D:
-ightshift-data
+powershell -ExecutionPolicy Bypass -File nightshift\start.ps1 --port 8799 --data-dir D:\nightshift-data
 ```
 
 It sets `OMB_LOOPBACK_TRUST=service` and runs `openmausbot serve` with the

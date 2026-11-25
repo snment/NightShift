@@ -10,7 +10,7 @@
 import type { RequestAuth } from "../request-auth.ts";
 
 export const BUSY_APPROVAL_REFUSAL = "A bot is working right now, and a bot's shell reaches NightShift from this computer just as your own terminal does, so an approval from a command on this computer is taken only while every bot is idle. Approve it on its card in the signed-in app or browser, or again once every bot is idle.";
-export const SERVICE_PERSON_REFUSAL = "This server does not treat commands on this computer as a person: sign in in the app or browser, or run the command with --token-file (openmausbot connect makes one). A command on this computer may only decline, or take a bot's own step with --as-bot.";
+export const SERVICE_PERSON_REFUSAL = "This server does not treat commands on this computer as a person: sign in in the app or browser, or run the command with --token-file (openmausbot connect --code makes one). A command on this computer may only decline, or take a bot's own step with --as-bot.";
 export const SERVICE_APPROVAL_REFUSAL = "This server does not treat commands on this computer as its owner, so approve it on its card in the signed-in app or browser.";
 
 /** Why this request may not approve, or null. */

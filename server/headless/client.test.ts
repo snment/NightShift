@@ -54,6 +54,11 @@ describe("explain", () => {
     const status = (code: number, message = "nope") => Object.assign(new Error(message), { status: code });
     expect(await explain(status(401))).toMatchObject({ exitCode: 5, hint: expect.stringContaining("--token-file") });
     expect(await explain(status(403, "admin scope required"))).toMatchObject({ exitCode: 5, message: "not allowed: admin scope required" });
+    expect((await explain(status(403, "admin scope required"))).hint).toContain("`openmausbot connect` mints one");
+    for (const refusal of ["This server does not treat commands on this computer as its owner, so approve it on its card in the signed-in app or browser.",
+      "This is a shared server, so a program on it without a paired session token may only check its health."]) {
+      expect(await explain(status(403, refusal))).toMatchObject({ exitCode: 5, hint: expect.stringContaining("--code CODE") });
+    }
     expect(await explain(status(409, "stop this bot's turn first"))).toMatchObject({ exitCode: 1, message: "stop this bot's turn first" });
     expect(await explain(status(409, 'OpenMausBot API error (409): {"error":"stop this bot\'s turn first","code":"thread_busy"}')))
       .toMatchObject({ exitCode: 1, message: "stop this bot's turn first" });

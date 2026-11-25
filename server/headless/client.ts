@@ -129,6 +129,8 @@ export function serverWords(message: string): string {
   }
 }
 
+const SERVICE_TRUST_REFUSAL = /does not treat commands on this computer as|This is a shared server|on this shared server a local request/;
+
 export async function explain(error: unknown, baseUrl?: string): Promise<HeadlessError> {
   if (error instanceof HeadlessError) return error;
   const mcp = await loadMcp().catch(() => undefined);
@@ -140,8 +142,9 @@ export async function explain(error: unknown, baseUrl?: string): Promise<Headles
       "get one with `openmausbot connect URL --out FILE`, then pass --token-file FILE or set OPENMAUSBOT_TOKEN");
   }
   if (status === 403) {
-    return new HeadlessError(`not allowed: ${message}`, EXIT.unreachable,
-      "this needs a paired session with the right scope: `openmausbot connect` mints one on this computer");
+    return new HeadlessError(`not allowed: ${message}`, EXIT.unreachable, SERVICE_TRUST_REFUSAL.test(message)
+      ? "this server does not trust commands on this computer: make a token file once with `openmausbot connect URL --code CODE --out FILE` (a code from Settings → Phone & devices in the signed-in app), then pass --token-file FILE"
+      : "this needs a paired session with the right scope: `openmausbot connect` mints one on this computer");
   }
   if (status === 404 && /^no such (bot|channel|conversation|task|message)\b/i.test(message)) {
     return usageError(message, "openmausbot bots and openmausbot channels list the ids");
