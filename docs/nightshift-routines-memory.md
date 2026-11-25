@@ -190,25 +190,73 @@ A bot's shell reaches the server as loopback, the same as the person's own
 terminal, and a loopback call without `as_bot` counts as the person. So an
 approval of a `MEMORY.md` change or of a diff (`team-memory decide`,
 `task approve-diff`, or Allow on either card) is held to
-`server/review-loop/human-approval.ts`:
+`server/review-loop/human-approval.ts`. NightShift runs with
+`OMB_LOOPBACK_TRUST=service` (below), where:
 
-- From a signed-in session (the app, a paired browser or device): always.
-- From a command on this computer without a session: only while every bot is
-  idle. A bot's shell runs only inside its own bot's turn, so its bot is busy;
-  the refusal says to approve on the card in the signed-in app or browser, or
-  again once every bot is idle.
-- Under `OMB_LOOPBACK_TRUST=service`: never from a command on this computer.
-- In the desktop app: as before; it already refuses every local change that
-  does not come from its own window.
+- From a signed-in session (the app, a paired browser, or a CLI command with
+  `--token-file`): always.
+- From a command on this computer without a session: never. It may decline a
+  card or a proposal, and take a bot's own review-loop step naming that bot
+  (`task transition --as-bot`, `team-memory propose --as-bot`); anything it
+  does as the person is refused.
+- It cannot mint a pairing code (`/api/auth/pairing` answers 403), so a bot's
+  shell cannot pair itself a session.
 - A denial is always taken.
 
-**Open risk:** on an owner-trust server (the self-hosted default), a bot's
-shell can still pair itself a session through `/api/auth/pairing` and
-`/api/auth/pair`, and then approve with that session. At Ask each of those
-shell calls is an approval card a person sees. Running the server with
-`OMB_LOOPBACK_TRUST=service` closes this as well (a local request may then
-only decline a card, and cannot pair); the person then needs a signed-in
-session to approve.
+On a server started without service trust (the self-hosted default, owner
+trust) a local approval without a session is taken only while every bot is
+idle, and a bot's shell could still pair itself a session through
+`/api/auth/pairing` and `/api/auth/pair`. That is why NightShift is not run
+that way.
+
+## Running NightShift
+
+Start the server with the start script, in a terminal:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File nightshift\start.ps1      # 127.0.0.1:8799, data in ~/.openmausbot
+powershell -ExecutionPolicy Bypass -File nightshift\start.ps1 --port 8799 --data-dir D:
+ightshift-data
+```
+
+It sets `OMB_LOOPBACK_TRUST=service` and runs `openmausbot serve` with the
+arguments you give it. The server logs `local requests: service trust
+(OMB_LOOPBACK_TRUST)` at start.
+
+**To approve a card** (MEMORY.md diff, push/merge/PR/deploy diff, any tool
+card) you need a signed-in browser or the app:
+
+1. At its start `serve` prints a one-time sign-in code in that terminal (it
+   is the only process that may make one; it hands the server a per-launch
+   secret over stdin).
+2. Open `http://127.0.0.1:8799` in a browser on this computer and enter the
+   code. That browser stays signed in (its session renews while used); you
+   approve on the card there.
+3. More codes, for another browser, the phone or the CLI: Settings → Phone &
+   devices in the signed-in browser. `openmausbot pair` from a terminal is
+   refused under service trust.
+
+**To run `team apply` and the other CLI commands** you need a token file, made
+once:
+
+```powershell
+# a code from Settings -> Phone & devices (or the one serve printed, if you have not used it)
+node --experimental-strip-types server/openmausbot.ts connect http://127.0.0.1:8799 --code CODE --out $HOME\.nightshift-cli-token
+node --experimental-strip-types server/openmausbot.ts team apply nightshift/team.yaml --url http://127.0.0.1:8799 --token-file $HOME\.nightshift-cli-token
+```
+
+- The token is written to that file, never printed. Keep it outside every
+  bot's folder: a command that holds it can approve, as you can.
+  `OPENMAUSBOT_TOKEN` works in place of `--token-file`.
+- It lasts 30 days and renews while it is used, up to 180 days
+  (`OMB_SESSION_TTL_DAYS`, `OMB_SESSION_MAX_DAYS`), and survives server
+  restarts. Settings → Phone & devices lists and revokes it.
+- Without it, `team apply`, `--check` and `export` stop with "This is a shared
+  server, so a program on it without a paired session token may only check its
+  health". `team-memory decide --deny` and declining a card work without it.
+
+The routine and the review loop need neither: the server runs them itself, and
+a bot's own step names the bot.
 
 ## Restarts
 
