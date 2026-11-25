@@ -13,8 +13,9 @@ import { describeMs, EXIT, flag, HeadlessError, parseDuration, usageError } from
 import { explain, type HeadlessClient } from "./client.ts";
 import type { VerbContext, VerbOutcome } from "./context.ts";
 import { applyEngine, ENGINE_KINDS, readSecret } from "./engine.ts";
+import { RESEARCH_ALLOWANCES, RESEARCH_ALLOW_KEYS, allowancesIn, isResearchAllowKey } from "../review-loop/research-allow.ts";
 import { parseRoutineResearch } from "../review-loop/routine-research.ts";
-import { everyTool, loadTeamFile, type DesiredBot, type DesiredRoutine, type TeamFile } from "./team-file.ts";
+import { everyTool, loadTeamFile, RESEARCH_ALLOW_BOT, type DesiredBot, type DesiredRoutine, type TeamFile } from "./team-file.ts";
 
 type Rec = Record<string, any>;
 const enc = encodeURIComponent;
@@ -100,7 +101,24 @@ export function botPatch(desired: DesiredBot, echo: Rec, team: string | undefine
     patch.toolScope = desired.tools;
     changes.push(desired.tools === null ? "tools: every tool" : "tools changed");
   }
+  const allowances = researchAllowancesPatch(desired, echo.alwaysAllow);
+  if (allowances) {
+    patch.alwaysAllow = allowances.keys;
+    changes.push(allowances.change);
+  }
   return { patch, changes };
+}
+
+/** The Researcher's allowances as the file lists them; any other bot holds none, so stray keys are taken off it. */
+function researchAllowancesPatch(desired: DesiredBot, keys: string[] | undefined): { keys: string[]; change: string } | null {
+  const current = allowancesIn(keys);
+  const wanted = key(desired.name) === key(RESEARCH_ALLOW_BOT) ? desired.allowWithoutCard : current.length ? [] : undefined;
+  if (wanted === undefined || sameSet(current, wanted)) return null;
+  const others = (keys ?? []).filter((one) => !isResearchAllowKey(one));
+  return {
+    keys: [...others, ...RESEARCH_ALLOWANCES.filter((one) => wanted.includes(one)).map((one) => RESEARCH_ALLOW_KEYS[one])],
+    change: `allowed without a card: ${current.join(", ") || "nothing"} → ${wanted.join(", ") || "nothing"}`,
+  };
 }
 
 const describeNew = (bot: DesiredBot) => [
@@ -481,7 +499,9 @@ export async function teamExportVerb(ctx: VerbContext): Promise<VerbOutcome> {
     if (bot.cwd) entry.cwd = bot.cwd;
     if (bot.browser === false || bot.browserProfile) entry.browser = { enabled: bot.browser !== false, ...(bot.browserProfile ? { profile: bot.browserProfile } : {}) };
     if (!everyTool(bot.toolScope)) entry.tools = bot.toolScope;
-    const listing: Rec[] = (await client.json<Rec>(`/api/bots/${enc(bot.id)}/skills`)).skills ?? [];
+    const allowances = allowancesIn(bot.alwaysAllow);
+    if (allowances.length && key(bot.name) === key(RESEARCH_ALLOW_BOT)) entry.allowWithoutCard = allowances;
+    const listing: Rec[] =(await client.json<Rec>(`/api/bots/${enc(bot.id)}/skills`)).skills ?? [];
     if (listing.length) entry.skills = [];
     for (const skill of listing) {
       const text = clean(String((await client.json<Rec>(`/api/bots/${enc(bot.id)}/skills/${enc(skill.name)}`)).text ?? ""), `bot "${bot.name}" skill ${skill.name}`);

@@ -78,6 +78,16 @@ export function readToolPaths(tool: unknown, input: unknown): string[] | undefin
   return typeof path === "string" && isAbsolute(path) ? [path] : undefined;
 }
 
+/** Claude's tools that write one file, named by `file_path`. */
+export const WRITE_TOOL_NAMES = ["Write", "Edit", "MultiEdit"] as const;
+
+/** The file a write tool's ask names (absolute), or undefined for any other tool or a relative path. */
+export function writeToolPaths(tool: unknown, input: unknown): string[] | undefined {
+  if (typeof tool !== "string" || !(WRITE_TOOL_NAMES as readonly string[]).includes(tool) || !input || typeof input !== "object" || Array.isArray(input)) return undefined;
+  const path = (input as Record<string, unknown>).file_path;
+  return typeof path === "string" && isAbsolute(path) ? [path] : undefined;
+}
+
 /** The files an ACP read call names: its locations and the usual path fields of its input. */
 export function acpReadPaths(toolCall: { kind?: unknown; locations?: unknown; rawInput?: unknown }): string[] | undefined {
   if (toolCall.kind !== "read") return undefined;

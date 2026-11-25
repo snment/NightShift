@@ -32,6 +32,9 @@ bots:
     # turn fails on a server running without the desktop app, so no routine could run while nobody is there.
     computer: off
     browser: false
+    # The only calls of any bot here answered without a card: web search, page fetches, and writing files under
+    # docs/research/ of the research task's own worktree. Everything else the Researcher does still asks.
+    allowWithoutCard: [WebSearch, WebFetch, docs/research/]
     soul: { file: souls/researcher.md }
 
   - name: Builder

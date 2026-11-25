@@ -144,6 +144,9 @@ export type RuntimeEvent = RuntimeEventBase &
         /** The files a read tool's ask reads (absolute): a request that reads only the bot's own files is answered
          * without the person. Like `command`, never broadcast. */
         reads?: string[];
+        /** The file a write tool's ask writes (absolute): the NightShift Researcher's writes under docs/research/ of
+         * its task's worktree are answered without the person. Like `command`, never broadcast. */
+        writes?: string[];
         choices?: string[];
         /** A provider's structured ask (Claude's AskUserQuestion): the whole
          * set of questions, each with its own options, so the card can offer

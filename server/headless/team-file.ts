@@ -9,6 +9,7 @@ import { BOT_PROFILE_LIMITS, fitsOnOneLine } from "../../shared/bot-profile.ts";
 import { parseSkillMd } from "../../shared/skill-md.ts";
 import { normalizeCronSchedule } from "../../shared/routine-schedule.ts";
 import { parseToolScope, type ToolScope } from "../../shared/tool-scope.ts";
+import { RESEARCH_ALLOWANCES, type ResearchAllowance } from "../review-loop/research-allow.ts";
 import { routineResearchPrompt } from "../review-loop/routine-research.ts";
 import { usageError } from "./args.ts";
 
@@ -18,6 +19,8 @@ export const SKILL_MAX_BYTES = 262_144;
 export const ROUTINE_PROMPT_MAX_CHARS = 20_000;
 /** The bot whose routines may start review-loop research (server/review-loop/host.ts ROLE_BOT_NAMES.keeper). */
 export const RESEARCH_ROUTINE_BOT = "Keeper";
+/** The one bot that may list `allowWithoutCard` (server/review-loop/host.ts ROLE_BOT_NAMES.researcher). */
+export const RESEARCH_ALLOW_BOT = "Researcher";
 
 const secret = z.union([
   z.object({ env: z.string().trim().min(1) }).strict(),
@@ -72,6 +75,7 @@ const teamFileSchema = z.object({
     was: z.string().trim().min(1).max(BOT_PROFILE_LIMITS.name).optional(),
     chief: z.boolean().optional(),
     manages: z.array(z.string().trim().min(1).max(60)).optional(),
+    allowWithoutCard: z.array(z.enum(RESEARCH_ALLOWANCES, { error: `must be one of ${RESEARCH_ALLOWANCES.join(", ")}` })).optional(),
     ...botFields,
   }).strict()).min(1, "list at least one bot"),
   rooms: z.array(z.object({
@@ -117,6 +121,8 @@ export interface DesiredBot {
   browser?: { enabled: boolean; profile?: string };
   /** null: no selection, so every tool (a file's `tools: {}` or `{ deny: [] }`). */
   tools?: ToolScope | null;
+  /** The Researcher's calls answered without a card; absent: left as they are. Any other bot has none. */
+  allowWithoutCard?: ResearchAllowance[];
   skills: DesiredSkill[];
 }
 export interface DesiredRoom { name: string; team?: string; members: string[]; brief?: string; responder?: string }
@@ -231,6 +237,7 @@ export function checkTeamFile(input: TeamFileInput, file: string, dir: string): 
     const bot = { ...defaults, ...entry };
     const where = `bot "${bot.name}"`;
     if (bot.manages?.length && !bot.chief) throw usageError(`${where}: manages needs chief: true`);
+    if (bot.allowWithoutCard?.length && key(bot.name) !== key(RESEARCH_ALLOW_BOT)) throw usageError(`${where}: only the ${RESEARCH_ALLOW_BOT} has calls allowed without a card`);
     let cwd: string | undefined;
     if (bot.cwd !== undefined) {
       if (bot.cwd === "~" || bot.cwd.startsWith("~/")) throw usageError(`${where}: cwd must be a full path (~ is not expanded the same way on the server)`);
@@ -265,7 +272,8 @@ export function checkTeamFile(input: TeamFileInput, file: string, dir: string): 
       ...(bot.model ? { model: { instanceId: bot.model.slice(0, slash), model: bot.model.slice(slash + 1) } } : {}),
       ...(bot.effort ? { effort: bot.effort } : {}), ...(bot.approval ? { approval: bot.approval } : {}),
       ...(bot.computer ? { computer: bot.computer } : {}), ...(cwd ? { cwd } : {}), ...(browser ? { browser } : {}),
-      ...(tools !== undefined ? { tools } : {}), skills,
+      ...(tools !== undefined ? { tools } : {}),
+      ...(bot.allowWithoutCard !== undefined ? { allowWithoutCard: [...new Set(bot.allowWithoutCard)] } : {}), skills,
     };
   });
   const chiefs = new Map<string, string>();
