@@ -22,7 +22,7 @@ Builder, Reviewer and Keeper.
 
 | Task | Goes to | What happens |
 | --- | --- | --- |
-| `To Do` + `research` | Researcher | `Working`. Writes `docs/research/<slug>-YYYY-MM-DD.md` in the task worktree, cites each URL with "accessed YYYY-MM-DD", and marks unverified claims `UNVERIFIED`. `research.done` then sets `To Do` + `dev`. |
+| `To Do` + `research` | Researcher | `Working`. Writes `docs/research/<slug>-YYYY-MM-DD.md` (the date once: a slug that has one keeps it) in the task worktree, cites each URL with "accessed YYYY-MM-DD", marks unverified claims `UNVERIFIED`, and ends its turn. The server then finishes it as `research.done`, recorded as the Researcher, which sets `To Do` + `dev`; no packet, or one the check refuses, sets `Blocked` and tells Keeper ([the Researcher's allow-list](nightshift-routines-memory.md#the-researchers-allow-list)). |
 | `To Do` + `dev` | Builder | `Working` on `feat/<slug>` in its own worktree. Commits `docs/handoffs/<slug>.md`; `build.done` then sets `Needs Review` + `review`. |
 | `Needs Review` + `review` | Reviewer | `review_round` + 1. Reviews the diff only. `review.approve` sets `Done` and tells Keeper. `review.changes` (with `file:line` notes) sends it back to `To Do` + `dev`. In round 3, it sets `Blocked` instead. |
 
@@ -122,9 +122,11 @@ The REST endpoints:
 - `POST /api/tasks/:id/approve-diff`
 
 **Open risk:** a bot's shell reaches the server as loopback, just like the
-person's CLI. `as_bot` names the bot, and a loopback call without it counts as
-the person. So the approval card, answered through the shared card route, is
-the approval path a bot's shell cannot answer for the person.
+person's CLI. `as_bot` names the bot (every prompt the loop gives a bot names
+it), and a loopback call without it counts as the person. An approval of a
+diff, by `approve-diff` or on its card, is therefore taken from a command on
+this computer only while every bot is idle; a signed-in session approves at
+any time ([who may approve](nightshift-routines-memory.md#who-may-approve)).
 
 ## Verifying it
 
