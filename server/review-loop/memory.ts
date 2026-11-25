@@ -1,11 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 
 import { lineDiff } from "../../shared/line-diff.ts";
 import { holdsCredential, redactSecretsInText } from "../../shared/redact.ts";
 import { OwnedFile, writeFileAtomic } from "../atomic.ts";
 import { LoopError, type LoopActor } from "./loop.ts";
+import { lf, memoryPath, readMemory } from "./memory-file.ts";
 import { TEAM_MEMORY_FILE } from "./model.ts";
 
 export const MEMORY_PROPOSALS_FILE = "memory-proposals.json";
@@ -59,16 +60,6 @@ export interface TeamMemoryDeps {
 }
 
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
-const lf = (text: string) => text.replace(/\r\n?/g, "\n");
-
-export function memoryPath(project: string): string {
-  return join(resolve(project), TEAM_MEMORY_FILE);
-}
-
-function readMemory(project: string): string {
-  const path = memoryPath(project);
-  return existsSync(path) ? lf(readFileSync(path, "utf8")) : "";
-}
 
 /** The lines a proposal adds that look like a credential (a provider key, a token, a password assignment). */
 export function secretLines(before: string, after: string): number[] {
@@ -170,10 +161,11 @@ export class TeamMemory {
   }
 
   /** An answer to one of these cards through the shared card route, or null for any other card. */
-  resolveCard(threadId: string, requestId: string, behavior: string, person: string): { status: number; body: unknown } | null {
+  resolveCard(threadId: string, requestId: string, behavior: string, person: string, refusal: string | null = null): { status: number; body: unknown } | null {
     const found = this.proposals.find((one) => one.id === requestId && one.thread_id === threadId);
     if (!found) return null;
     if (behavior !== "allow" && behavior !== "deny") return { status: 400, body: { error: "answer this card with allow or deny" } };
+    if (behavior === "allow" && refusal) return { status: 403, body: { error: refusal } };
     try {
       const proposal = this.decide(found.id, behavior === "allow" ? "approved" : "denied", undefined, { kind: "person", id: person });
       return { status: 200, body: { ok: true, outcome: "answered", proposal } };

@@ -1,4 +1,4 @@
-import { renameSync } from "node:fs";
+import { mkdirSync, renameSync } from "node:fs";
 import { join } from "node:path";
 
 import type { AdminActionRow } from "../admin-activity.ts";
@@ -7,9 +7,11 @@ import type { MausColor, Message, OptionCardData } from "../store.ts";
 import { memoryAuditRow, taskAuditRow } from "./audit.ts";
 import { localGit, type TaskGit } from "./git.ts";
 import { LoopError, ReviewLoop, type RoutineResearch } from "./loop.ts";
+import { RESEARCH_DIR, researchGrant, type ResearchGrant } from "./research-allow.ts";
 import { parseRoutineResearch } from "./routine-research.ts";
 import { MEMORY_APPROVAL_TOOL, MEMORY_PROPOSALS_FILE, TeamMemory, type MemoryProposal } from "./memory.ts";
-import type { DiffApproval, ReviewRole, TurnUsage, WorkTask } from "./model.ts";
+import { memoryBlockIn } from "./memory-file.ts";
+import { routingTag, TEAM_MEMORY_FILE, type DiffApproval, type ReviewRole, type TurnUsage, type WorkTask } from "./model.ts";
 import { WorkTaskStore } from "./store.ts";
 
 export const WORK_TASKS_FILE = "work-tasks.json";
@@ -24,7 +26,7 @@ const CARD_DIFF_CHARS = 12_000;
 /** What the loop needs of the bot and room store. */
 export interface LoopStore {
   bots: ReadonlyArray<{ id: string; name: string; color: MausColor; threadId: string }>;
-  bot(id: string): { id: string; name: string; threadId: string } | null | undefined;
+  bot(id: string): { id: string; name: string; threadId: string; alwaysAllow?: string[] } | null | undefined;
   group(id: string): { threadId: string } | null | undefined;
   appendMessage(threadId: string, message: Omit<Message, "id" | "at">): Message;
 }
@@ -75,10 +77,17 @@ export interface NightShift {
   loop: ReviewLoop;
   memory: TeamMemory;
   /** An answer to one of the loop's or memory's cards, or null for any other card. */
-  resolveCard(threadId: string, requestId: string, behavior: string, person: string): { status: number; body: unknown } | null;
+  resolveCard(threadId: string, requestId: string, behavior: string, person: string, refusal?: string | null): { status: number; body: unknown } | null;
   /** A routine run's turn: a research routine of Keeper's starts a review-loop task and gets a one-line prompt back;
    * any other routine gets null and runs as it is. */
   routineTurn(run: { id: string; routineId: string; routineName: string; botId: string }, prompt: string): string | null;
+  /** The Researcher's allow-list answer to one permission ask in its own chat, or null when a person must answer. */
+  researchGrant(botId: string, threadId: string, ask: { tool: string; writes?: readonly string[] }): ResearchGrant | null;
+  /** A turn in a bot's own chat ended well: the Researcher's packet, if it wrote one, finishes its task, and a
+   * MEMORY.md block at the end of Keeper's reply becomes a proposal on an approval card. */
+  turnEnded(botId: string, threadId: string, reply: string): void;
+  /** A turn in a bot's own chat failed or could not start: the task it worked on is Blocked and Keeper is told. */
+  turnFailed(botId: string, threadId: string, cause: string): void;
 }
 
 export function createNightShift(deps: NightShiftLoopDeps & { cwdOf(botId: string): string | undefined }): NightShift {
@@ -104,8 +113,30 @@ export function createNightShift(deps: NightShiftLoopDeps & { cwdOf(botId: strin
   return {
     loop,
     memory,
-    resolveCard: (threadId, requestId, behavior, person) =>
-      memory.resolveCard(threadId, requestId, behavior, person) ?? loop.resolveCard(threadId, requestId, behavior, person),
+    resolveCard: (threadId, requestId, behavior, person, refusal = null) =>
+      memory.resolveCard(threadId, requestId, behavior, person, refusal) ?? loop.resolveCard(threadId, requestId, behavior, person, refusal),
+    turnEnded: (botId, threadId, reply) => {
+      if (deps.store.bot(botId)?.threadId !== threadId) return;
+      guarded("finish the Researcher's task", () => loop.researchTurnEnded(botId));
+      const block = botId === keeper()?.id ? memoryBlockIn(reply) : null;
+      const project = block ? deps.cwdOf(botId) : undefined;
+      if (!block || !project) return;
+      try {
+        memory.propose({ project, text: block.text, ...(block.summary ? { summary: block.summary } : {}) }, { kind: "bot", id: botId });
+      } catch (error) {
+        const reason = error instanceof LoopError ? error.message : String(error);
+        deps.store.appendMessage(threadId, { role: "bot", kind: "text", text: `NightShift did not propose that ${TEAM_MEMORY_FILE} change: ${reason}`, ...from() });
+      }
+    },
+    turnFailed: (botId, threadId, cause) => {
+      if (deps.store.bot(botId)?.threadId === threadId) guarded("block the task of a failed turn", () => loop.turnFailed(botId, cause));
+    },
+    researchGrant: (botId, threadId, ask) => {
+      const researcher = deps.store.bots.find((bot) => bot.name === ROLE_BOT_NAMES.researcher);
+      if (!researcher || researcher.id !== botId || researcher.threadId !== threadId) return null;
+      const task = loop.list().find((one) => one.owner_bot_id === botId && one.status === "Working" && routingTag(one) === "research");
+      return researchGrant(ask, deps.store.bot(botId)?.alwaysAllow ?? [], task?.worktree_path ?? null);
+    },
     routineTurn: (run, prompt) => {
       const spec = parseRoutineResearch(prompt);
       if (!spec || run.botId !== keeper()?.id) return null;
@@ -115,6 +146,9 @@ export function createNightShift(deps: NightShiftLoopDeps & { cwdOf(botId: strin
       };
       try {
         const task = loop.createForRoutine(input);
+        if (task.routine_run_id !== run.id) {
+          return `The routine "${run.routineName}" ran, but its earlier research task "${task.title}" (${task.slug}) is still ${task.status}${task.blocked_reason ? `: ${task.blocked_reason}` : ""}, so no new task was started. Say so in one line in this chat and do nothing else.`;
+        }
         return `The routine "${run.routineName}" started research task "${task.title}" (${task.slug}) for the Researcher; it is ${task.status}${task.blocked_reason ? `: ${task.blocked_reason}` : ""}. Say so in one line in this chat and do nothing else. You will be handed the packet when it is done.`;
       } catch (error) {
         const reason = error instanceof LoopError ? error.message : String(error);
@@ -123,6 +157,15 @@ export function createNightShift(deps: NightShiftLoopDeps & { cwdOf(botId: strin
       }
     },
   };
+}
+
+/** The loop's bookkeeping never fails a turn. */
+function guarded(what: string, run: () => unknown): void {
+  try {
+    run();
+  } catch (error) {
+    console.warn(`[review-loop] could not ${what}: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 export function createNightShiftLoop(deps: NightShiftLoopDeps): ReviewLoop {
@@ -159,9 +202,12 @@ export function createNightShiftLoop(deps: NightShiftLoopDeps): ReviewLoop {
       const room = task.room_id ? bots.group(task.room_id) : undefined;
       if (room) bots.appendMessage(room.threadId, { role: "bot", kind: "text", text, ...as() });
     },
-    dispatch: (_role, botId, _task, prompt) => {
+    dispatch: (role, botId, task, prompt) => {
       const bot = bots.bot(botId);
       if (!bot?.threadId) return;
+      if (role === "researcher" && task.worktree_path) {
+        try { mkdirSync(join(task.worktree_path, ...RESEARCH_DIR), { recursive: true }); } catch { /* the write then asks the person */ }
+      }
       deps.send(botId, bot.threadId, prompt).catch((error: unknown) => {
         console.warn(`[review-loop] could not give ${bot.name} its turn: ${error instanceof Error ? error.message : String(error)}`);
       });

@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
+import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { diffGate, diffSha256, type TaskGit } from "./git.ts";
 import { handoffPathFor, validateHandoff, validateResearch } from "./handoff.ts";
+import { memoryProposalPrompt } from "./memory-file.ts";
 import {
-  DIFF_ACTIONS, MAX_REVIEW_ROUNDS, REVIEW_ROLES, ROUTINE_TAG, TEAM_MEMORY_FILE, routingTag, withTag, isWorkTaskStatus,
+  DIFF_ACTIONS, MAX_REVIEW_ROUNDS, REVIEW_ROLES, ROUTINE_TAG, TEAM_MEMORY_FILE, researchPacketPath, routingTag, withTag, isWorkTaskStatus,
   type DiffAction, type DiffApproval, type ReviewRole, type RoleUsage, type TurnUsage, type UsageRole, type WorkTask,
 } from "./model.ts";
 import type { NewWorkTask, WorkTaskStore } from "./store.ts";
@@ -18,7 +20,7 @@ export type TaskAuditAction =
   | "task.review-started" | "task.review-approved" | "task.review-changes" | "task.review-cap" | "task.split-flagged"
   | "task.blocked" | "task.resumed" | "task.reassigned" | "task.usage"
   | "task.diff-approval-requested" | "task.diff-approval-decided" | "task.deleted"
-  | "task.routine-started" | "task.redispatched" | "task.interrupted";
+  | "task.routine-started" | "task.routine-still-open" | "task.redispatched" | "task.interrupted" | "task.turn-failed";
 
 export interface TaskAuditEvent {
   action: TaskAuditAction;
@@ -95,7 +97,6 @@ const touchesTeamMemory = (paths: readonly string[]) => paths.some((path) => pat
 
 const isUnrouted = (task: WorkTask) => task.status === "To Do" && !task.owner_bot_id && (routingTag(task) === "research" || routingTag(task) === "dev");
 
-const memoryProposal = (project: string, keeper: string | undefined) => `If the team should remember something from it, write the whole new ${TEAM_MEMORY_FILE} to a file outside the repository and propose it with: node --experimental-strip-types server/openmausbot.ts team-memory propose --project ${project} --file NEW_MEMORY_FILE --summary "one line"${keeper ? ` --as-bot ${keeper}` : ""}. The person sees the exact diff and approves it before it is saved; never write ${TEAM_MEMORY_FILE} yourself and never put a key, token or password in it.`;
 
 function snapshot(task: WorkTask): TaskAuditEvent["task"] {
   const { id, slug, title, status, tags, owner_bot_id, review_round, branch } = task;
@@ -108,12 +109,10 @@ const isUsageRole = (role: ReviewRole): role is UsageRole => (USAGE_ROLES as rea
 
 const count = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0);
 
+const today = () => new Date().toISOString().slice(0, 10);
+
 export class ReviewLoop {
   private readonly deps: ReviewLoopDeps;
-  /** The task and role each bot was last handed. The turn that ends with the bot's own transition is booked after
-   * the task has moved on, so it still counts here once. Kept in memory: after a restart, a bot that still owns a
-   * task is found from the task list instead. */
-  private readonly turnOwners = new Map<string, { taskId: string; role: UsageRole }>();
 
   constructor(deps: ReviewLoopDeps) {
     this.deps = deps;
@@ -148,6 +147,12 @@ export class ReviewLoop {
   createForRoutine(input: RoutineResearch): WorkTask {
     const existing = this.deps.store.list().find((task) => task.routine_run_id === input.runId);
     if (existing) return isUnrouted(existing) ? this.route(existing) : existing;
+    const open = this.deps.store.list().find((task) => task.created_by === `routine:${input.routineId}` && task.status !== "Done");
+    if (open) {
+      this.audit("task.routine-still-open", open, SYSTEM, { routineId: input.routineId, routineName: input.routineName, runId: input.runId });
+      this.post(open, `Routine "${input.routineName}" ran while "${open.title}" (${open.slug}) is still ${open.status}; no new task was started.`);
+      return isUnrouted(open) ? this.route(open) : open;
+    }
     if (!input.title.trim()) throw new LoopError(400, "the routine names no research title");
     if (!input.project.trim()) throw new LoopError(400, "the routine's bot has no project folder");
     const actor: LoopActor = SYSTEM;
@@ -303,10 +308,11 @@ ${this.promptFor(role, next)}`);
   }
 
   /** An answer to one of this loop's approval cards through the shared card route, or null for any other card. */
-  resolveCard(threadId: string, requestId: string, behavior: string, person: string): { status: number; body: unknown } | null {
+  resolveCard(threadId: string, requestId: string, behavior: string, person: string, refusal: string | null = null): { status: number; body: unknown } | null {
     const task = this.deps.store.list().find((one) => one.approvals.some((a) => a.request_id === requestId && a.thread_id === threadId));
     if (!task) return null;
     if (behavior !== "allow" && behavior !== "deny") return { status: 400, body: { error: "answer this card with allow or deny" } };
+    if (behavior === "allow" && refusal) return { status: 403, body: { error: refusal } };
     try {
       const next = this.decideDiffApproval(task.id, requestId, behavior === "allow" ? "approved" : "denied", undefined, { kind: "person", id: person });
       return { status: 200, body: { ok: true, outcome: "answered", task: next } };
@@ -371,7 +377,7 @@ ${this.promptFor(role, next)}`);
     }, null);
     this.audit("task.research-written", next, actor, { researchPath: path, routine: true });
     this.post(next, `Research packet ready: ${path}. Done; Keeper reports it.`);
-    this.tellKeeper(next, `Routine research task "${next.title}" (${next.slug}) is Done. The Researcher wrote ${path} in ${next.worktree_path ?? next.project}. Report it to the person in two or three lines: what was found and where the packet is. Nothing was pushed or merged. ${memoryProposal(next.project, this.deps.roles().keeper)}`);
+    this.tellKeeper(next, `Routine research task "${next.title}" (${next.slug}) is Done. The Researcher wrote ${path} in ${next.worktree_path ?? next.project}. Report it to the person in two or three lines: what was found and where the packet is. Nothing was pushed or merged. Answer from this message alone. ${memoryProposalPrompt(next.project)}`);
     return next;
   }
 
@@ -394,7 +400,7 @@ ${this.promptFor(role, next)}`);
     }, null);
     this.audit("task.review-approved", next, actor, { round: next.review_round });
     this.post(next, `Reviewer approved "${next.title}" in round ${next.review_round}. Done; nothing was pushed or merged.`);
-    this.tellKeeper(next, `Task "${next.title}" (${next.slug}) is Done after ${next.review_round} review round(s) on ${next.branch}. Report it to the person; a push or merge still needs their approval of the exact diff. ${memoryProposal(next.project, this.deps.roles().keeper)}`);
+    this.tellKeeper(next, `Task "${next.title}" (${next.slug}) is Done after ${next.review_round} review round(s) on ${next.branch}. Report it to the person; a push or merge still needs their approval of the exact diff. ${memoryProposalPrompt(next.project)}`);
     return next;
   }
 
@@ -470,12 +476,8 @@ ${this.promptFor(role, next)}`);
   noteTurnUsage(turn: TurnUsage): WorkTask | null {
     const owner = this.turnOwnerOf(turn.botId);
     if (!owner) return null;
-    const task = this.deps.store.get(owner.taskId);
-    if (!task) {
-      this.turnOwners.delete(turn.botId);
-      return null;
-    }
-    if (task.owner_bot_id !== turn.botId) this.turnOwners.delete(turn.botId);
+    let task = owner.task;
+    if (task.owner_bot_id !== turn.botId && task.turn_owners?.[turn.botId]) task = this.update(task, (t) => { delete t.turn_owners![turn.botId]; }, null);
     const usage: RoleUsage = {
       inputTokens: count(turn.input), outputTokens: count(turn.output),
       cachedInputTokens: count(turn.cachedInput), cacheWriteTokens: count(turn.cacheWrite), reasoningTokens: count(turn.reasoning),
@@ -487,13 +489,16 @@ ${this.promptFor(role, next)}`);
     }, turn.model);
   }
 
-  private turnOwnerOf(botId: string): { taskId: string; role: UsageRole } | null {
-    const known = this.turnOwners.get(botId);
-    if (known) return known;
+  /** The task a bot's turn counts on: the one it was last handed (saved on the task, so a restart keeps it), else one
+   * it owns now. */
+  private turnOwnerOf(botId: string): { task: WorkTask; role: UsageRole } | null {
+    const tasks = this.deps.store.list();
+    const handed = tasks.find((one) => one.turn_owners?.[botId]);
+    if (handed) return { task: handed, role: handed.turn_owners![botId]! };
     const roles = this.deps.roles();
     const role = USAGE_ROLES.find((one) => roles[one] === botId);
-    const task = role ? this.deps.store.list().find((one) => one.owner_bot_id === botId) : undefined;
-    return role && task ? { taskId: task.id, role } : null;
+    const task = role ? tasks.find((one) => one.owner_bot_id === botId) : undefined;
+    return role && task ? { task, role } : null;
   }
 
   private recordUsage(task: WorkTask, role: UsageRole, input: number, output: number, actor: LoopActor): WorkTask {
@@ -579,8 +584,61 @@ ${this.promptFor(role, next)}`);
   }
 
   private handOver(role: ReviewRole, botId: string, task: WorkTask, prompt: string): void {
-    if (isUsageRole(role)) this.turnOwners.set(botId, { taskId: task.id, role });
+    if (isUsageRole(role)) {
+      for (const other of this.deps.store.list()) {
+        if (other.id !== task.id && other.turn_owners?.[botId]) this.update(other, (t) => { delete t.turn_owners![botId]; }, null);
+      }
+      this.update(task, (t) => { t.turn_owners = { ...t.turn_owners, [botId]: role }; }, null);
+    }
     this.deps.dispatch?.(role, botId, task, prompt);
+  }
+
+  /** The Researcher's turn in its own chat ended. A packet it wrote under docs/research/ finishes its research task as
+   * `research.done` would, recorded as the Researcher, so it never needs a shell; a turn that ends with no packet, or
+   * one the check refuses, blocks the task and tells Keeper, so nothing sits at Working unseen. */
+  researchTurnEnded(botId: string): WorkTask | null {
+    if (this.deps.roles().researcher !== botId) return null;
+    const task = this.deps.store.list().find((one) => one.owner_bot_id === botId && one.status === "Working" && routingTag(one) === "research");
+    if (!task) return null;
+    const path = this.packetIn(task);
+    if (!path) return this.blockAndTell(task, `the Researcher's turn ended without writing ${researchPacketPath(task.slug, today())} in ${task.worktree_path ?? task.project}`);
+    try {
+      return this.submitResearch(task, path, { kind: "bot", id: botId });
+    } catch (error) {
+      if (error instanceof LoopError) return this.blockAndTell(task, error.message);
+      throw error;
+    }
+  }
+
+  /** A bot's turn on a task failed or could not start: the task is Blocked with the cause, and Keeper is told. */
+  turnFailed(botId: string, cause: string): WorkTask | null {
+    const task = this.deps.store.list().find((one) => one.owner_bot_id === botId && this.roleOf(one) !== null);
+    const role = task ? this.roleOf(task) : null;
+    if (!task || !role || this.deps.roles()[role] !== botId) return null;
+    const next = this.blockAndTell(task, `the ${role}'s turn failed: ${cause.split("\n")[0]!.slice(0, 300)}`);
+    this.audit("task.turn-failed", next, SYSTEM, { role, botId });
+    return next;
+  }
+
+  private blockAndTell(task: WorkTask, reason: string): WorkTask {
+    const next = this.block(task, reason);
+    this.tellKeeper(next, `Task "${next.title}" (${next.slug}) is Blocked: ${reason}. Tell the person; they can resume it.`);
+    return next;
+  }
+
+  /** The newest packet for this task under docs/research/ of its worktree: the slug, with or without a date. */
+  private packetIn(task: WorkTask): string | null {
+    if (!task.worktree_path) return null;
+    const dir = join(task.worktree_path, "docs", "research");
+    const name = new RegExp(`^${task.slug}(?:-\\d{4}-\\d{2}-\\d{2})?\\.md$`);
+    let found: Array<{ file: string; at: number }>;
+    try {
+      found = readdirSync(dir).filter((file) => name.test(file)).map((file) => ({ file, at: statSync(join(dir, file)).mtimeMs }));
+    } catch {
+      return null;
+    }
+    const newest = found.sort((a, b) => b.at - a.at)[0];
+    return newest ? `docs/research/${newest.file}` : null;
   }
 
   private flagSplit(task: WorkTask, reason: string, stat: { files: number; lines: number }, actor: LoopActor): WorkTask {
@@ -603,11 +661,14 @@ ${this.promptFor(role, next)}`);
 
   promptFor(role: ReviewRole, task: WorkTask, reviewedBefore?: string | null): string {
     const id = `task ${task.id} (${task.slug})`;
-    const done = (event: string, extra = "") => `node --experimental-strip-types server/openmausbot.ts task transition ${task.id} ${event}${extra}`;
+    const asBot = task.owner_bot_id ? ` --as-bot ${task.owner_bot_id}` : "";
+    const done = (event: string, extra = "") => `node --experimental-strip-types server/openmausbot.ts task transition ${task.id} ${event}${extra}${asBot}`;
     const head = `NightShift ${id}: "${task.title}"\n${task.description ? `\n${task.description}\n` : ""}`;
-    const today = new Date().toISOString().slice(0, 10);
+    const date = today();
     if (role === "researcher") {
-      return `${head}\nYou are the Researcher. Search the live web first, open the official page, and write docs/research/${task.slug}-${today}.md in ${task.worktree_path} (the task's worktree, never the base checkout) with each source's URL and "accessed ${today}". Mark anything you could not verify UNVERIFIED. Do not edit code.\nWhen the packet is written, run: ${done("research.done", ` --research-path docs/research/${task.slug}-${today}.md`)}`;
+      const packet = researchPacketPath(task.slug, date);
+      const where = task.worktree_path ?? task.project;
+      return `${head}\nYou are the Researcher. Search the live web first (WebSearch), open the official page (WebFetch), and write the packet with the Write tool to ${join(where, packet)} (the task's worktree, never the base checkout), with each source's URL and "accessed ${date}". Mark anything you could not verify UNVERIFIED. Do not edit code. Search again yourself; do not copy an earlier packet.\nUse only WebSearch, WebFetch and Write into ${join(where, "docs", "research")}: those run with nobody there, and any other tool (a shell, a read, a write anywhere else) waits for a person who may be away.\nWhen the packet is written, end your turn: NightShift checks it and finishes the task.`;
     }
     if (role === "builder") {
       const notes = task.review_round > 0 && task.review_notes ? `\nReview round ${task.review_round} asked for these changes; fix only these:\n${task.review_notes}\n` : "";

@@ -648,7 +648,7 @@ import { createThreadRoutes } from "./routes/threads.ts";
 import { createWebhookRoutes } from "./routes/webhooks.ts";
 import { withScopeHint } from "./connector-scope-hint.ts";
 import { connectorFileDeps, connectorFileScope, prepareConnectorFiles, withMissingFileHint } from "./connector-files.ts";
-import { createConnectorCards } from "./host/connector-cards.ts"; import { bookTaskTurnUsage, createNightShift } from "./review-loop/host.ts"; import { createWorkTaskRoutes } from "./review-loop/routes.ts";
+import { createConnectorCards } from "./host/connector-cards.ts"; import { bookTaskTurnUsage, createNightShift } from "./review-loop/host.ts"; import type { ResearchGrant } from "./review-loop/research-allow.ts"; import { localApprovalRefusal } from "./review-loop/human-approval.ts"; import { createWorkTaskRoutes } from "./review-loop/routes.ts";
 import { createLoginMailCodes } from "./host/login-mail-codes.ts";
 import { onThreadSeen, personAsks as personAskAt, sawThread } from "./thread-presence.ts"; import { createWarmSummaryHost, HARNESS_IDLE_FRACTION } from "./host/warm-summary-host.ts";
 
@@ -1351,7 +1351,7 @@ function operatorPrices(): PriceList | null {
   return entitled("billing") && cfg.billing?.prices && Object.keys(cfg.billing.prices).length ? cfg.billing.prices : null;
 }
 
-let bookReviewLoopTurn: (row: UsageRow) => void = () => undefined; let nightShiftRoutineTurn: (run: { id: string; routineId: string; routineName: string; botId: string }, prompt: string) => string | null = () => null;
+let bookReviewLoopTurn: (row: UsageRow) => void = () => undefined; const nightShiftApprovalRefusal = (auth: RequestAuth) => localApprovalRefusal({ auth, desktopGuarded: desktopMutationToken !== undefined, botBusy: store.bots.some((bot) => bot.busy) }); let nightShiftTurnEnded: (botId: string, threadId: string, reply: string) => void = () => undefined; let nightShiftTurnFailed: (botId: string, threadId: string, cause: string) => void = () => undefined; let nightShiftResearchGrant: (botId: string, threadId: string, ask: { tool: string; writes?: readonly string[] }) => ResearchGrant | null = () => null; let nightShiftRoutineTurn: (run: { id: string; routineId: string; routineName: string; botId: string }, prompt: string) => string | null = () => null;
 const attributeUsage = createUsageAttribution({ section: (botId) => store.bot(botId)?.section, threadTrigger: (threadId) => turnTriggers.get(threadId), routineWriter: (id) => { const key = cloudRoutineAuthors?.writer(id); return key ? teamOwners.people?.list().find((one) => personKey({ id: "", email: one.email }) === key)?.email : undefined; } }); const usageCapGate = createUsageCapGate({ dataDir: DATA_DIR, caps: () => cfg.usageCaps, botName: (botId) => store.bot(botId)?.name, language: () => appLanguage(), log: (line) => console.log(line), notice: (aboutBotId, title, body) => { const bot = store.bot(aboutBotId ?? "") ?? store.bots[0]; if (bot) broadcast({ kind: "notify", notification: logNotification(buildSpendNotification({ id: bot.id, name: bot.name }, bot.threadId, { title, body })) }, { adminOnly: true }); } }); const threadStanding = (botId: string, threadId: string): ThreadStanding => { const owner = directRequestOwners.get(threadId); return { unattended: isUnattended(botId, threadId), automation: owner?.automation, origin: owner?.origin?.kind }; }; const routineTriggerOf = (threadId: string) => { const run = activeRoutineRunForThread(threadId); return run ? run.triggerSource ?? (run.manual ? "manual" : "schedule") : undefined; }; function bookTurnUsage(row: Omit<UsageRow, "at" | "costSource">, tokensReported = true, notificationThreadId = row.threadId): void {
   const cost = tokensReported || row.costUsd !== null ? ledgerCost(row, operatorPrices()) : { costUsd: null };
   const booked = attributeUsage({ ...row, ...cost, ...usageTrace.settle(row.threadId), at: new Date().toISOString() });
@@ -6329,7 +6329,7 @@ bus.subscribe((event: RuntimeEvent) => {
   const privateImageEvent = event.type === "item.completed" && event.itemType === "assistant_image";
   if (!privateImageEvent) {
     // Exact executable input is internal; the bus's persistence redactor does not scrub the live event.
-    const publicEvent = event.type === "request.opened" ? { ...event, command: undefined, commandLine: undefined, reads: undefined } : publicReplyEvent(event, groupSpeakers.get(event.threadId)?.botId);
+    const publicEvent = event.type === "request.opened" ? { ...event, command: undefined, commandLine: undefined, reads: undefined, writes: undefined } : publicReplyEvent(event, groupSpeakers.get(event.threadId)?.botId);
     broadcast({ kind: "runtime", event: publicEvent });
   }
   if (event.type === "turn.completed") { const note = runComputers.turnEnded(event.threadId, event.ok); if (note) store.appendMessage(event.threadId, { role: "bot", kind: "activity", tool: { name: `recovery: ${note}`, ok: true } }); } const routineRun = privateImageEvent ? null : (routines?.handleRuntimeEvent(event) ?? null);
@@ -6484,7 +6484,8 @@ bus.subscribe((event: RuntimeEvent) => {
         ? heldAtSafetyFloor(event, autoVerdict(effectiveApprovalMode, event.tool, {
           requiresExplicitApproval: event.requiresExplicitApproval,
           commandAllowed: Boolean(command && commandAllowlist.matches(asker.id, command)),
-          toolAllowed: Boolean(toolAllowKey && asker.alwaysAllow?.includes(toolAllowKey)), ownFilesRead: !guestDriven && readsOwnFiles(DATA_DIR, asker.id, event), // never in a guest's turn: the folder holds its owner's memory
+          toolAllowed: Boolean(toolAllowKey && asker.alwaysAllow?.includes(toolAllowKey)),
+          researchAllowed: !guestDriven && !event.requiresExplicitApproval ? nightShiftResearchGrant(asker.id, event.threadId, event) : null, ownFilesRead: !guestDriven && readsOwnFiles(DATA_DIR, asker.id, event), // never in a guest's turn: the folder holds its owner's memory
         }))
         : null;
       // Claude accepts --permission-mode auto for any model but silently starts in Manual where auto is unavailable (Haiku 4.5, Sonnet 4.5, an org that disabled it).
@@ -6696,6 +6697,7 @@ bus.subscribe((event: RuntimeEvent) => {
       const fileIncident = () => { if (broken && (!held || limitTakeover.firstIncident(broken.id, broken.modelSelection, held, facts.limitResetsAt))) reportIncident({ kind: "failed", bot: broken, threadId: event.threadId, detail: failureDetail, facts, notified: Boolean(held) }); };
       if (failed && bot) void quotaSwitch.turnFailed(bot, event, internal);
       else if (bot && event.ok) quotaSwitch.turnSucceeded(bot, event.threadId);
+      if (bot && event.ok && !stopped) nightShiftTurnEnded(bot.id, event.threadId, reply);
       if (bot && event.ok && !stopped && completedTurnId && !routineRun && !coordinator.assignerOf(event.threadId)) askCards.ownQuestion(bot.id, event.threadId, completedTurnId);
       const lastReported = turnUsage.get(event.threadId);
       turnUsage.delete(event.threadId);
@@ -6904,7 +6906,7 @@ function runtimeWorkPending(threadId: string): boolean {
         && coordinator.children(root.id).some(child => child.reply !== "none" && child.createdAt >= (root.startedAt ?? 0)))));
 }
 
-const { reportIncident, incidentRefused, retryThread } = createChiefNotices({
+const { reportIncident: reportChiefIncident, incidentRefused, retryThread } = createChiefNotices({
   store, notify, threadBusy, botAtThreadCapacity, startTurn, quietThread: (_botId, threadId) => proactive.fence.confines(threadId) || botApiThread(threadId), privateThread: (threadId) => teamHost.ownTurn(threadId), confined: cloudGuestDriven, threadLanguage,
   assignerOf: (threadId) => coordinator.assignerOf(threadId),
   threadSettling: (threadId) => settlingTurns.has(threadId), threadQueued: (botId, threadId) => queuedThreadPosition(botId, threadId) !== null,
@@ -6912,6 +6914,12 @@ const { reportIncident, incidentRefused, retryThread } = createChiefNotices({
   ...(teamOwners.noticeRouting ? { routing: teamOwners.noticeRouting } : {}),
   continueRequest: (botId, threadId, text) => startTurn(botId, text, { threadId, unattended: true, cardContinuation: true, requestMessageId: directRequestOwners.get(threadId)?.messageId }),
 });
+
+/** A NightShift task's bot whose turn failed or could not start blocks that task and tells Keeper; the Chief hears as before. */
+const reportIncident: typeof reportChiefIncident = (input) => {
+  if (input.kind === "failed" || input.kind === "could-not-start") nightShiftTurnFailed(input.bot.id, input.threadId, input.detail);
+  return reportChiefIncident(input);
+};
 
 function turnAnswers(threadId: string, opts?: {
   cardContinuation?: boolean; requestMessageId?: string; coordination?: { id: string };
@@ -12047,7 +12055,7 @@ ROUTES.push(createBotMessageRoutes({
   routines: () => routines,
   fromPhone: phones.fromPhone, notePhoneSend: phones.noteSend,
   desktopManaged: DESKTOP_MANAGED, cloudHome: Boolean(CLOUD_HOME), DirectSendRefused,
-  acceptDirectSend, directSendRefusal, startTurn, usageTriggerFor, messageSender, cloudGuestSendRefusal, cloudThreadRefusal, runOwners, runActor, resolveAccessRequest: (threadId, requestId, behavior, message) => nightShift.resolveCard(threadId, requestId, behavior, "approval card") ?? lendingLifts?.resolve(threadId, requestId, behavior) ?? accessRequests.resolve(threadId, requestId, behavior, message), relayRefusal: CLOUD_TEAM ? (bot, email) => relayedSendRefusal(bot, email, Boolean(email && teamOwners.people?.list().some((one) => one.email === email && one.role !== "member"))) : undefined,
+  acceptDirectSend, directSendRefusal, startTurn, usageTriggerFor, messageSender, cloudGuestSendRefusal, cloudThreadRefusal, runOwners, runActor, resolveAccessRequest: (threadId, requestId, behavior, message, auth) => nightShift.resolveCard(threadId, requestId, behavior, "approval card", nightShiftApprovalRefusal(auth)) ?? lendingLifts?.resolve(threadId, requestId, behavior) ?? accessRequests.resolve(threadId, requestId, behavior, message), relayRefusal: CLOUD_TEAM ? (bot, email) => relayedSendRefusal(bot, email, Boolean(email && teamOwners.people?.list().some((one) => one.email === email && one.role !== "member"))) : undefined,
   noAiRefusal: noAiNotice.refusal, cardAnswerRefusal, commandRememberRefusal, requestBehavior, requestedTaskBot, botForThread, threadBusy,
   botAtThreadCapacity, parksBehindCoordination, activeGroupTurnForBot, runningTurnInstance, engineSteersImages, resolveReplyTarget,
   turnSelection, policyModelRefusal, clearUnattended, drainQueuedSends, answeringCardAs, resolveAndSendTrust, resolveAndSendTeamSetup, resolveAndSendMcp,
@@ -12057,7 +12065,7 @@ ROUTES.push(createBotMessageRoutes({
   goals: oneOnOneGoals, inboxReply: teamMessages.replyIn, typedCardAnswer: askCards.typed, ...(CLOUD_TEAM ? { teamAiOwnerName: () => teamAiOwner(teamOwners.people?.list() ?? [], teamHost.personName)?.name ?? "" } : {}),
   relayedReaction: (threadId, messageId, person, emoji) => void store.setReaction(threadId, messageId, relayedPersonKey(person),
     { emoji, name: person.name ?? person.email, at: Date.now() }),
-})); const nightShift = createNightShift({ dataDir: DATA_DIR, store, cwdOf: (botId) => store.bot(botId)?.cwd ?? undefined, audit: (row) => appendAdminAction(DATA_DIR, row), decide: (row) => appendDecision(DATA_DIR, row), send: (botId, threadId, text) => acceptDirectSend({ botId, threadId, text, trigger: { kind: "bot" }, personPresent: false }) }); const reviewLoop = nightShift.loop; nightShiftRoutineTurn = nightShift.routineTurn; setTimeout(() => { try { nightShift.loop.recoverAfterRestart((botId) => { const bot = store.bot(botId); return Boolean(bot && threadBusy(botId, bot.threadId)); }); } catch (error) { console.warn(`[review-loop] restart recovery failed: ${error instanceof Error ? error.message : String(error)}`); } }, 60_000).unref(); ROUTES.push(createWorkTaskRoutes({ loop: reviewLoop, memory: nightShift.memory, botExists: (id) => Boolean(store.bot(id)), person: (auth) => (auth.kind === "session" ? auth.session.email ?? auth.session.label : "loopback") })); bookReviewLoopTurn = (row) => { bookTaskTurnUsage(reviewLoop, store, row); };
+})); const nightShift = createNightShift({ dataDir: DATA_DIR, store, cwdOf: (botId) => store.bot(botId)?.cwd ?? undefined, audit: (row) => appendAdminAction(DATA_DIR, row), decide: (row) => appendDecision(DATA_DIR, row), send: (botId, threadId, text) => acceptDirectSend({ botId, threadId, text, trigger: { kind: "bot" }, personPresent: false }) }); const reviewLoop = nightShift.loop; nightShiftRoutineTurn = nightShift.routineTurn; nightShiftResearchGrant = nightShift.researchGrant; nightShiftTurnEnded = nightShift.turnEnded; nightShiftTurnFailed = nightShift.turnFailed; setTimeout(() => { try { nightShift.loop.recoverAfterRestart((botId) => { const bot = store.bot(botId); return Boolean(bot && threadBusy(botId, bot.threadId)); }); } catch (error) { console.warn(`[review-loop] restart recovery failed: ${error instanceof Error ? error.message : String(error)}`); } }, 60_000).unref(); ROUTES.push(createWorkTaskRoutes({ loop: reviewLoop, memory: nightShift.memory, botExists: (id) => Boolean(store.bot(id)), person: (auth) => (auth.kind === "session" ? auth.session.email ?? auth.session.label : "loopback"), approvalRefusal: nightShiftApprovalRefusal })); bookReviewLoopTurn = (row) => { bookTaskTurnUsage(reviewLoop, store, row); };
 const liveRoots = (threadId: string, botId: string | undefined) => { const bot = botId ? store.bot(botId) : store.botByThread(threadId); return bot ? messageFileRootsForThread(bot.id, threadId).filter((root) => root !== ATTACHMENTS_DIR) : null; }; const chatApps = createChatApps({ store, dataDir: DATA_DIR, liveRows: liveAppRows, liveRoots, paused: () => workspaceMaintenance.active || moveFreeze.frozen() });
 const chatAppsMcp = createChatAppsMcp({ store, apps: chatApps, dataDir: DATA_DIR, keys: mcpKeys, storedServers: () => cfg.mcpServers ?? {}, mountedServers: (bot) => teamConnections.engineMcp(bot), personMcp: teamConnections.personMcp, probeAs: (server) => mcpServersHost.probeAs(server), oauth: mcpOAuth });
 ROUTES.push(createChatAppRoutes({ store, apps: chatApps, threadRefusal: cloudThreadRefusal, mcpRpc: chatAppsMcp.rpc, threadVisible: (auth, threadId) => (auth.kind !== "session" || sessions.isLive(auth.session.id)) && visibleTo(viewerFor(auth)).thread(threadId) }));

@@ -91,6 +91,9 @@ export interface WorkTask {
   routine_run_id?: string | null;
   /** The hand-over a restart already gave back once (`role:bot:status:round`); a second restart on it blocks the task. */
   restart_handover?: string | null;
+  /** Each bot last handed a turn on this task, by id, with the role it played; kept on disk, so the turn that ends with
+   * the bot's own transition, or one a restart cut across, is still booked here once after the task has moved on. */
+  turn_owners?: Record<string, UsageRole>;
   created_by: string;
   created_at: number;
   updated_at: number;
@@ -118,6 +121,14 @@ export function isWorkTaskStatus(value: unknown): value is WorkTaskStatus {
 export function withTag(tags: readonly string[], add: RoutingTag | null, ...remove: RoutingTag[]): string[] {
   const kept = tags.filter((tag) => !remove.includes(tag as RoutingTag) && tag !== add);
   return add ? [...kept, add] : kept;
+}
+
+const DATED = /\d{4}-\d{2}-\d{2}/;
+
+/** Where the Researcher writes a task's packet: the slug once, with today's date only when the slug has none (a
+ * routine's title already carries its date). */
+export function researchPacketPath(slug: string, today: string): string {
+  return `docs/research/${DATED.test(slug) ? slug : `${slug}-${today}`}.md`;
 }
 
 export function routingTag(task: Pick<WorkTask, "tags">): RoutingTag | null {
