@@ -28,8 +28,10 @@ bots:
     # Swap back to grok / grok-4.7 when the user gets Grok — one-line change, no code change.
     # model: grok/grok-4.7
     approval: ask
-    computer: local
-    browser: true
+    # No computer and no managed browser: WebSearch and WebFetch are the engine's own tools. On computer local every
+    # turn fails on a server running without the desktop app, so no routine could run while nobody is there.
+    computer: off
+    browser: false
     soul: { file: souls/researcher.md }
 
   - name: Builder

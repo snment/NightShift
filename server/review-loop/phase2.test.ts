@@ -326,6 +326,7 @@ describe("the starter team file", () => {
     const team = loadTeamFile(path);
     expect(team.bots.map((one) => one.name)).toEqual([DEFAULT_BOT_NAME, "Researcher", "Builder", "Reviewer", "Keeper"]);
     expect(team.bots.filter((one) => one.approval !== "ask").map((one) => `${one.name}: ${one.approval ?? "not set"}`)).toEqual([]);
+    expect(team.bots.find((one) => one.name === "Researcher")).toMatchObject({ computer: "off", browser: { enabled: false }, model: { instanceId: "claude", model: "claude-sonnet-5-5" } });
     expect(team.routines).toHaveLength(1);
     const [routine] = team.routines;
     expect(routine).toMatchObject({ bot: "Keeper", enabled: true, schedule: { type: "cron", timeZone: "UTC" } });
