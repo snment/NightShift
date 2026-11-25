@@ -107,6 +107,8 @@ describe("routine research", () => {
     expect(report.prompt).toContain("packet.md");
     expect(report.prompt).toContain("<nightshift-memory summary=");
     expect(report.prompt).toContain("<current-memory>\n# Team memory");
+    expect(report.prompt).toContain("<research-packet>\n");
+    expect(report.prompt.indexOf("<research-packet>")).toBeLessThan(report.prompt.indexOf("<current-memory>"));
     expect(h.audit.map((event) => event.action)).toEqual(["task.created", "task.routine-started", "task.branch-created", "task.assigned", "task.research-written"]);
     expect(h.audit[1]!.detail).toEqual({ routineId: "routine-1", routineName: "Weekly research", runId: "run-1" });
     expect(h.dispatched.some((one) => one.role === "builder")).toBe(false);

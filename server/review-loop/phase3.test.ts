@@ -226,7 +226,21 @@ describe("research that finishes with nobody there", () => {
     expect(done).toMatchObject({ status: "Done", research_path: `docs/research/${task.slug}.md` });
     expect(h.audit.find((event) => event.action === "task.research-written")!.actor).toEqual({ kind: "bot", id: ROLES.researcher });
     expect(h.dispatched.at(-1)!.role).toBe("keeper");
+    expect(h.dispatched.at(-1)!.prompt).toContain(`<research-packet>\n${RESEARCH.replace(/\r\n?/g, "\n").trim()}\n</research-packet>`);
     expect(h.loop.researchTurnEnded(ROLES.researcher)).toBeNull();
+  });
+
+  it("hands Keeper a long packet cut to a bounded size, with CRLF made LF", () => {
+    const h = harness();
+    const task = h.loop.createForRoutine(routineRun());
+    writeFileSync(join(task.worktree_path!, "docs", "research", `${task.slug}.md`), `${RESEARCH}\n${"x".repeat(20_000)}\n`.replace(/\n/g, "\r\n"));
+    h.loop.researchTurnEnded(ROLES.researcher);
+    const prompt = h.dispatched.at(-1)!.prompt;
+    const packet = prompt.slice(prompt.indexOf("<research-packet>\n") + 18, prompt.indexOf("\n</research-packet>"));
+    expect(packet.startsWith(RESEARCH.trim())).toBe(true);
+    expect(packet).not.toContain("\r");
+    expect(packet.endsWith("\n… (cut here)")).toBe(true);
+    expect(packet.length).toBeLessThan(12_100);
   });
 
   it("blocks the task and tells Keeper when the turn ends with no packet, or one the check refuses", () => {

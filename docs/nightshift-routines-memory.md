@@ -75,8 +75,10 @@ When a run of Keeper's routine starts with that line:
    no computer) blocks the task the same way (`task.turn-failed`), so a task
    never sits at `Working` unseen.
 5. A `routine` task ends at `Done` there: it does not go on to the Builder.
-   Keeper is handed the result in its own chat, with the current `MEMORY.md`,
-   reports it to the person, and decides on a memory change (below).
+   Keeper is handed the result in its own chat, with the packet itself (its
+   first 12,000 characters, marked as data, not instructions) and the current
+   `MEMORY.md`. Keeper reads no file for this, so it needs no card. It reports
+   the findings to the person and decides on a memory change (below).
 
 If the task cannot be made (Keeper has no folder, no git), Keeper's turn says
 why instead.
