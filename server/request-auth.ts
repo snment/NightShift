@@ -53,6 +53,11 @@ export const SERVICE_ALLOW: ReadonlyArray<{ methods: readonly string[]; path: Re
   { methods: ["POST"], path: /^\/api\/bots\/[\w-]+\/requests\/[\w-]+\/interrupt$/ },
   { methods: ["DELETE"], path: /^\/api\/bots\/[\w-]+\/queue\/[\w-]+$/ },
   { methods: ["POST"], path: /^\/api\/threads\/[\w-]+\/respond$/ }, // decline only: see the handler
+  // A review-loop bot's own step (as_bot) and a decline of a MEMORY.md or diff approval: see review-loop/routes.ts.
+  { methods: ["POST"], path: /^\/api\/tasks\/[\w-]+\/transition$/ },
+  { methods: ["POST"], path: /^\/api\/tasks\/[\w-]+\/approve-diff$/ },
+  { methods: ["POST"], path: /^\/api\/team-memory\/proposals$/ },
+  { methods: ["POST"], path: /^\/api\/team-memory\/proposals\/[\w-]+\/decide$/ },
   { methods: ["GET", "POST", "PUT", "PATCH", "DELETE"], path: /^\/api\/internal\// }, // capability bearer checked in the handler
   { methods: ["POST"], path: /^\/api\/testing\/internal-capability$/ }, // exists only with its private key
 ];

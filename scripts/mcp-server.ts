@@ -73,7 +73,7 @@ async function fetchJson(url: string, options: RequestInit = {}): Promise<any> {
   const response = await fetch(url, { ...options, signal, headers });
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    if (response.status === 403 && !new Headers(headers).has("Authorization")) {
+    if (response.status === 403 && !new Headers(headers).has("Authorization") && !/does not treat commands on this computer/.test(text)) {
       throw new OpenMausBotApiError(403, /on this shared server/.test(text) // the server says which kind refused it
         ? "This is a shared server, so a program on it without a paired session token may only check its health. Set OPENMAUSBOT_TOKEN to a paired session (openmausbot connect), as described in docs/mcp-server.md."
         : "OpenMausBot refused this request because the installed desktop app requires a paired session token. Set OPENMAUSBOT_TOKEN as described in docs/mcp-server.md.");

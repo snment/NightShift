@@ -12,7 +12,7 @@ import type { RequestAuth } from "../request-auth.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
 import { localGit } from "./git.ts";
 import { createNightShift, type LoopStore } from "./host.ts";
-import { BUSY_APPROVAL_REFUSAL, SERVICE_APPROVAL_REFUSAL, localApprovalRefusal } from "./human-approval.ts";
+import { BUSY_APPROVAL_REFUSAL, SERVICE_APPROVAL_REFUSAL, SERVICE_PERSON_REFUSAL, localApprovalRefusal } from "./human-approval.ts";
 import { ReviewLoop, type LoopActor, type TaskAuditEvent } from "./loop.ts";
 import { memoryBlockIn, memoryProposalPrompt } from "./memory-file.ts";
 import { TeamMemory } from "./memory.ts";
@@ -371,6 +371,60 @@ describe("approvals from this computer", () => {
     const second = team.propose({ project: repo, text: `${MEMORY}- one more\n- and another\n` }, { kind: "bot", id: ROLES.keeper });
     busy = true;
     expect((await call(`/api/team-memory/proposals/${second.id}/decide`, { decision: "denied", proposed_sha256: second.proposed_sha256 })).body.proposal.decision).toBe("denied");
+  });
+  it("under service trust lets a local command take only a bot's own step or decline, and never act as the person", async () => {
+    const team = new TeamMemory({ file: join(root, "data", "memory-proposals.json"), keeper: () => ROLES.keeper, audit: () => undefined, card: () => "t-keeper" });
+    const handler = createWorkTaskRoutes({ loop: harness().loop, memory: team, botExists: () => true, person: () => "loopback",
+      approvalRefusal: (auth) => localApprovalRefusal({ auth, desktopGuarded: false, botBusy: false }) });
+    const call = async (path: string, body: unknown, auth: RequestAuth = service) => {
+      let out: { status: number; body: any } | undefined;
+      await handler({ req: {} as never, res: {} as never, path, method: "POST", auth, url: new URL(`http://x${path}`),
+        json: (_res: unknown, status: number, value: unknown) => { out = { status, body: value }; }, readBody: async () => body } as never);
+      return out!;
+    };
+    expect(await call("/api/tasks/nope/transition", { event: "stop" })).toMatchObject({ status: 403, body: { error: SERVICE_PERSON_REFUSAL } });
+    expect((await call("/api/tasks/nope/transition", { event: "build.done", as_bot: ROLES.builder })).status).toBe(404);
+    expect(await call("/api/team-memory/proposals", { project: repo, text: `${MEMORY}- x
+` })).toMatchObject({ status: 403, body: { error: SERVICE_PERSON_REFUSAL } });
+    const proposed = await call("/api/team-memory/proposals", { project: repo, text: `${MEMORY}- x
+`, as_bot: ROLES.keeper });
+    expect(proposed.status).toBe(201);
+    const sha = proposed.body.proposal.proposed_sha256 as string;
+    const decide = `/api/team-memory/proposals/${proposed.body.proposal.id}/decide`;
+    expect(await call(decide, { decision: "approved", proposed_sha256: sha })).toMatchObject({ status: 403, body: { error: SERVICE_APPROVAL_REFUSAL } });
+    expect(await call(decide, { decision: "approved", proposed_sha256: sha, as_bot: ROLES.keeper })).toMatchObject({ status: 403, body: { error: SERVICE_APPROVAL_REFUSAL } });
+    expect(await call("/api/tasks/nope/approve-diff", { decision: "approved", diff_sha256: "a", request_id: "r" })).toMatchObject({ status: 403, body: { error: SERVICE_APPROVAL_REFUSAL } });
+    expect((await call("/api/tasks/nope/approve-diff", { decision: "denied", diff_sha256: "a", request_id: "r" })).status).toBe(404);
+    expect(readFileSync(join(repo, "MEMORY.md"), "utf8")).toBe(MEMORY);
+    expect((await call(decide, { decision: "denied", proposed_sha256: sha })).body.proposal).toMatchObject({ decision: "denied", decided_by: "loopback" });
+    expect(readFileSync(join(repo, "MEMORY.md"), "utf8")).toBe(MEMORY);
+  });
+
+  it("keeps Keeper's own proposal under service trust: a card, nothing written, and only a signed-in session saves it", async () => {
+    const { store, messages } = fakeStore();
+    const ns = createNightShift({ dataDir: join(root, "data"), store, git: localGit, cwdOf: () => repo, audit: () => undefined, decide: () => undefined, send: async () => undefined });
+    ns.turnEnded("id-Keeper", "t-Keeper", `Report.
+<nightshift-memory summary="Scan cadence">
+${MEMORY}- The scan runs Mondays.
+</nightshift-memory>`);
+    const [proposal] = ns.memory.list();
+    expect(proposal).toMatchObject({ decision: "pending", proposed_by: "bot:id-Keeper" });
+    expect(messages.some((one) => one.threadId === "t-Keeper" && one.message.card?.title === "Save this change to MEMORY.md?")).toBe(true);
+    const handler = createWorkTaskRoutes({ loop: harness().loop, memory: ns.memory, botExists: () => true, person: (auth) => (auth.kind === "session" ? "phone" : "loopback"),
+      approvalRefusal: (auth) => localApprovalRefusal({ auth, desktopGuarded: false, botBusy: false }) });
+    const decide = async (auth: RequestAuth) => {
+      let out: { status: number; body: any } | undefined;
+      const path = `/api/team-memory/proposals/${proposal!.id}/decide`;
+      await handler({ req: {} as never, res: {} as never, path, method: "POST", auth, url: new URL(`http://x${path}`),
+        json: (_res: unknown, status: number, value: unknown) => { out = { status, body: value }; },
+        readBody: async () => ({ decision: "approved", proposed_sha256: proposal!.proposed_sha256 }) } as never);
+      return out!;
+    };
+    expect((await decide(service)).status).toBe(403);
+    expect(ns.memory.resolveCard("t-Keeper", proposal!.id, "allow", "approval card", localApprovalRefusal({ auth: service, desktopGuarded: false, botBusy: false }))).toMatchObject({ status: 403 });
+    expect(readFileSync(join(repo, "MEMORY.md"), "utf8")).toBe(MEMORY);
+    expect((await decide(session)).body.proposal.decision).toBe("approved");
+    expect(readFileSync(join(repo, "MEMORY.md"), "utf8")).toContain("- The scan runs Mondays.");
   });
 });
 

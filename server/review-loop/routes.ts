@@ -3,6 +3,7 @@ import { PASS, type RouteHandler } from "../routes/table.ts";
 import { LoopError, type LoopActor, type ReviewLoop, type TransitionEvent } from "./loop.ts";
 import type { TeamMemory } from "./memory.ts";
 import type { DiffAction } from "./model.ts";
+import { SERVICE_PERSON_REFUSAL, serviceCaller } from "./human-approval.ts";
 
 export interface WorkTaskRouteDeps {
   loop: ReviewLoop;
@@ -30,12 +31,13 @@ const text = (value: unknown): string | undefined => (typeof value === "string" 
  */
 export function createWorkTaskRoutes(deps: WorkTaskRouteDeps): RouteHandler {
   const { loop } = deps;
-  const actorOf = (auth: RequestAuth, body: Record<string, unknown>): LoopActor => {
+  const actorOf = (auth: RequestAuth, body: Record<string, unknown>, declining = false): LoopActor => {
     const bot = text(body.as_bot)?.trim();
     if (bot) {
       if (!deps.botExists(bot)) throw new LoopError(400, `unknown bot: ${bot}`);
       return { kind: "bot", id: bot };
     }
+    if (serviceCaller(auth) && !declining) throw new LoopError(403, SERVICE_PERSON_REFUSAL);
     return { kind: "person", id: deps.person(auth) };
   };
   return async ({ req, res, path, method, auth, json, readBody }) => {
@@ -61,7 +63,7 @@ export function createWorkTaskRoutes(deps: WorkTaskRouteDeps): RouteHandler {
           if (!sha) return json(res, 400, { error: "proposed_sha256 is required: approve the exact change you read" });
           const refused = decision === "approved" ? deps.approvalRefusal?.(auth) : null;
           if (refused) return json(res, 403, { error: refused });
-          return json(res, 200, { proposal: memory.decide(found[1]!, decision, sha, actorOf(auth, body)) });
+          return json(res, 200, { proposal: memory.decide(found[1]!, decision, sha, actorOf(auth, body, decision === "denied")) });
         }
         return json(res, 405, { error: `${method} ${path} is not a team memory route` });
       }
@@ -115,7 +117,7 @@ export function createWorkTaskRoutes(deps: WorkTaskRouteDeps): RouteHandler {
         if (!sha) return json(res, 400, { error: "diff_sha256 is required: approve the exact diff you read" });
         const refused = decision === "approved" ? deps.approvalRefusal?.(auth) : null;
         if (refused) return json(res, 403, { error: refused });
-        return json(res, 200, { task: loop.decideDiffApproval(m[1]!, text(body.request_id) ?? "", decision, sha, actorOf(auth, body)) });
+        return json(res, 200, { task: loop.decideDiffApproval(m[1]!, text(body.request_id) ?? "", decision, sha, actorOf(auth, body, decision === "denied")) });
       }
       return json(res, 405, { error: `${method} ${path} is not a task route` });
     } catch (error) {

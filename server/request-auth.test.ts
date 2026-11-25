@@ -721,6 +721,11 @@ describe("loopback trust: owner on one person's machine, service on a shared wor
     ["GET", "/api/internal/agents"],
     ["POST", "/api/internal/hook"],
     ["POST", "/api/testing/internal-capability"],
+    // A review-loop bot's own step and a decline; the handler refuses the rest (review-loop/phase3.test.ts).
+    ["POST", "/api/tasks/wt-1/transition"],
+    ["POST", "/api/tasks/wt-1/approve-diff"],
+    ["POST", "/api/team-memory/proposals"],
+    ["POST", "/api/team-memory/proposals/mp-1/decide"],
   ];
   const ADMIN_CALLS: Array<[string, string]> = [
     ["PUT", "/api/config"], ["PATCH", "/api/config"], ["GET", "/api/config"],
@@ -732,6 +737,7 @@ describe("loopback trust: owner on one person's machine, service on a shared wor
     ["POST", "/api/fleet/workspaces"], ["POST", "/api/settings/custom-domain"], ["POST", "/api/workspace-backup/export"],
     ["POST", "/api/bots/bot-1/messages"], ["POST", "/api/bots/bot-1/respond"], ["POST", "/api/bots/bot-1/always-allow"],
     ["POST", "/api/threads/thread-1/undo"], ["POST", "/api/groups/room-1/messages"], ["POST", "/api/routines"], ["GET", "/api/events"],
+    ["POST", "/api/auth/pair"], ["POST", "/api/tasks"], ["PATCH", "/api/tasks/wt-1"], ["DELETE", "/api/tasks/wt-1"], ["POST", "/api/tasks/wt-1/request-approval"],
   ];
 
   it("keeps the owner exactly as before when no trust is given or trust is owner", () => {
