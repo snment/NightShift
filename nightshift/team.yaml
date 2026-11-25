@@ -4,17 +4,23 @@
 # Bot names are working names for Phase 0; do not rename until the user confirms the final names.
 version: 1
 
+# Every bot is at Ask, the chief included: no bot here runs with Full access.
 defaults:
-  team: NightShift
   approval: ask
-  cwd: C:\Users\SNMENT\workspace\NightShift
 
 teams:
   - name: NightShift
     brief: { file: souls/team-brief.md }
 
 bots:
+  # The server's own chief bot, made at its first start with Full access. Listed only to hold it at Ask; its team,
+  # folder, model and computer stay as they are.
+  - name: NightShift
+    approval: ask
+
   - name: Researcher
+    team: NightShift
+    cwd: C:\Users\SNMENT\workspace\NightShift
     title: Live-web researcher
     description: Searches the web first, opens the official page, cites URL and date, and writes a research packet.
     # Claude Code engine (driver claudeAgent), live WebSearch + WebFetch, read-only for code.
@@ -27,6 +33,8 @@ bots:
     soul: { file: souls/researcher.md }
 
   - name: Builder
+    team: NightShift
+    cwd: C:\Users\SNMENT\workspace\NightShift
     title: Builder on its own feat branch
     description: Builds from a task and its research packet on feat/<task-slug>, then writes a handoff packet.
     model: claude/claude-opus-5-5
@@ -36,6 +44,8 @@ bots:
     soul: { file: souls/builder.md }
 
   - name: Reviewer
+    team: NightShift
+    cwd: C:\Users\SNMENT\workspace\NightShift
     title: Diff-only code reviewer
     description: Reviews the handoff packet and the diff only. Read-only except review notes.
     model: codex/gpt-6.1-sol
@@ -45,6 +55,8 @@ bots:
     soul: { file: souls/reviewer.md }
 
   - name: Keeper
+    team: NightShift
+    cwd: C:\Users\SNMENT\workspace\NightShift
     title: Memory, queue and reports
     description: Owns MEMORY.md, the task queue, status questions and the Done report to the user.
     model: claude/claude-sonnet-5-5

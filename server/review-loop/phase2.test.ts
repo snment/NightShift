@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { DEFAULT_BOT_NAME } from "../../shared/default-bot.ts";
 import { parseCommand } from "../headless/args.ts";
 import { loadTeamFile } from "../headless/team-file.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
@@ -323,7 +324,8 @@ describe("the starter team file", () => {
   it("declares Keeper's research routine, keeps every bot at Ask, and keeps the Grok swap line", () => {
     const path = fileURLToPath(new URL("../../nightshift/team.yaml", import.meta.url));
     const team = loadTeamFile(path);
-    expect(team.bots.map((one) => [one.name, one.approval])).toEqual([["Researcher", "ask"], ["Builder", "ask"], ["Reviewer", "ask"], ["Keeper", "ask"]]);
+    expect(team.bots.map((one) => one.name)).toEqual([DEFAULT_BOT_NAME, "Researcher", "Builder", "Reviewer", "Keeper"]);
+    expect(team.bots.filter((one) => one.approval !== "ask").map((one) => `${one.name}: ${one.approval ?? "not set"}`)).toEqual([]);
     expect(team.routines).toHaveLength(1);
     const [routine] = team.routines;
     expect(routine).toMatchObject({ bot: "Keeper", enabled: true, schedule: { type: "cron", timeZone: "UTC" } });
