@@ -481,10 +481,27 @@ ${this.promptFor(role, next)}`);
     return next;
   }
 
+  /** The conversation a bot works its current task in: a routine task's own Researcher conversation, or undefined for
+   * the bot's own chat. */
+  taskThreadOf(botId: string): string | undefined {
+    const task = this.deps.store.list().find((one) => one.owner_bot_id === botId && this.roleOf(one) !== null);
+    return (task && this.roleOf(task) === "researcher" && task.research_thread_id) || undefined;
+  }
+
+  /** The task whose own Researcher conversation this is, whatever its status. */
+  taskOfThread(threadId: string): WorkTask | undefined {
+    return this.deps.store.list().find((one) => one.research_thread_id === threadId);
+  }
+
+  setResearchThread(id: string, threadId: string): WorkTask {
+    return this.update(this.get(id), (t) => { t.research_thread_id = threadId; }, null);
+  }
+
   /** Books one turn from the usage ledger on the task its bot is working on, or returns null when the bot is on no
-   * task or the engine reported no tokens. */
+   * task or the engine reported no tokens. A turn in a task's own conversation counts on that task. */
   noteTurnUsage(turn: TurnUsage): WorkTask | null {
-    const owner = this.turnOwnerOf(turn.botId);
+    const own = turn.threadId !== undefined ? this.taskOfThread(turn.threadId) : undefined;
+    const owner = own ? (this.deps.roles().researcher === turn.botId ? { task: own, role: "researcher" as const } : null) : this.turnOwnerOf(turn.botId);
     if (!owner) return null;
     let task = owner.task;
     if (task.owner_bot_id !== turn.botId && task.turn_owners?.[turn.botId]) task = this.update(task, (t) => { delete t.turn_owners![turn.botId]; }, null);

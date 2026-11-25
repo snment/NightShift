@@ -11,7 +11,7 @@ import { RESEARCH_DIR, researchGrant, type ResearchGrant } from "./research-allo
 import { parseRoutineResearch } from "./routine-research.ts";
 import { MEMORY_APPROVAL_TOOL, MEMORY_PROPOSALS_FILE, TeamMemory, type MemoryProposal } from "./memory.ts";
 import { memoryBlockIn } from "./memory-file.ts";
-import { routingTag, TEAM_MEMORY_FILE, type DiffApproval, type ReviewRole, type TurnUsage, type WorkTask } from "./model.ts";
+import { ROUTINE_TAG, routingTag, TEAM_MEMORY_FILE, type DiffApproval, type ReviewRole, type TurnUsage, type WorkTask } from "./model.ts";
 import { WorkTaskStore } from "./store.ts";
 
 export const WORK_TASKS_FILE = "work-tasks.json";
@@ -36,8 +36,12 @@ export interface NightShiftLoopDeps {
   store: LoopStore;
   audit(row: Omit<AdminActionRow, "at">): void;
   decide(row: Omit<DecisionRow, "at">): void;
-  /** Gives the bot a turn in its own chat. */
+  /** Gives the bot a turn in that conversation. */
   send(botId: string, threadId: string, text: string): Promise<unknown>;
+  /** A new conversation of the bot's, not shown first; its thread id, or null. */
+  openThread?(botId: string, title: string): string | null;
+  /** Whether this conversation of the bot's still exists. */
+  hasThread?(botId: string, threadId: string): boolean;
   git?: TaskGit;
 }
 
@@ -92,6 +96,11 @@ export interface NightShift {
 
 export function createNightShift(deps: NightShiftLoopDeps & { cwdOf(botId: string): string | undefined }): NightShift {
   const loop = createNightShiftLoop(deps);
+  /** Where the loop hands this bot its turns now: its current task's own conversation, else its own chat. */
+  const workChat = (botId: string, threadId: string) => {
+    const bot = deps.store.bot(botId);
+    return Boolean(bot) && threadId === (loop.taskThreadOf(botId) ?? bot!.threadId);
+  };
   const keeper = () => deps.store.bots.find((bot) => bot.name === ROLE_BOT_NAMES.keeper);
   const from = () => { const k = keeper(); return k ? { from: { botId: k.id, name: k.name, color: k.color } } : {}; };
   const memory = new TeamMemory({
@@ -116,8 +125,8 @@ export function createNightShift(deps: NightShiftLoopDeps & { cwdOf(botId: strin
     resolveCard: (threadId, requestId, behavior, person, refusal = null) =>
       memory.resolveCard(threadId, requestId, behavior, person, refusal) ?? loop.resolveCard(threadId, requestId, behavior, person, refusal),
     turnEnded: (botId, threadId, reply) => {
+      if (workChat(botId, threadId)) guarded("finish the Researcher's task", () => loop.researchTurnEnded(botId));
       if (deps.store.bot(botId)?.threadId !== threadId) return;
-      guarded("finish the Researcher's task", () => loop.researchTurnEnded(botId));
       const block = botId === keeper()?.id ? memoryBlockIn(reply) : null;
       const project = block ? deps.cwdOf(botId) : undefined;
       if (!block || !project) return;
@@ -129,11 +138,11 @@ export function createNightShift(deps: NightShiftLoopDeps & { cwdOf(botId: strin
       }
     },
     turnFailed: (botId, threadId, cause) => {
-      if (deps.store.bot(botId)?.threadId === threadId) guarded("block the task of a failed turn", () => loop.turnFailed(botId, cause));
+      if (workChat(botId, threadId)) guarded("block the task of a failed turn", () => loop.turnFailed(botId, cause));
     },
     researchGrant: (botId, threadId, ask) => {
       const researcher = deps.store.bots.find((bot) => bot.name === ROLE_BOT_NAMES.researcher);
-      if (!researcher || researcher.id !== botId || researcher.threadId !== threadId) return null;
+      if (!researcher || researcher.id !== botId || !workChat(botId, threadId)) return null;
       const task = loop.list().find((one) => one.owner_bot_id === botId && one.status === "Working" && routingTag(one) === "research");
       return researchGrant(ask, deps.store.bot(botId)?.alwaysAllow ?? [], task?.worktree_path ?? null);
     },
@@ -181,11 +190,19 @@ export function createNightShiftLoop(deps: NightShiftLoopDeps): ReviewLoop {
   }
   const { store: bots } = deps;
   const keeper = () => bots.bots.find((bot) => bot.name === ROLE_BOT_NAMES.keeper);
+  /** A routine task gets its own Researcher conversation, so one run's context never carries into the next. */
+  const researchThread = (botId: string, task: WorkTask): string | null => {
+    if (!task.tags.includes(ROUTINE_TAG) || !deps.openThread) return null;
+    if (task.research_thread_id && deps.hasThread?.(botId, task.research_thread_id) !== false) return task.research_thread_id;
+    const opened = deps.openThread(botId, task.title);
+    if (opened) loop.setResearchThread(task.id, opened);
+    return opened;
+  };
   const as = () => {
     const k = keeper();
     return k ? { from: { botId: k.id, name: k.name, color: k.color } } : {};
   };
-  return new ReviewLoop({
+  const loop: ReviewLoop = new ReviewLoop({
     store,
     git: deps.git ?? localGit,
     worktreeRoot: join(deps.dataDir, "worktrees"),
@@ -208,7 +225,8 @@ export function createNightShiftLoop(deps: NightShiftLoopDeps): ReviewLoop {
       if (role === "researcher" && task.worktree_path) {
         try { mkdirSync(join(task.worktree_path, ...RESEARCH_DIR), { recursive: true }); } catch { /* the write then asks the person */ }
       }
-      deps.send(botId, bot.threadId, prompt).catch((error: unknown) => {
+      const threadId = (role === "researcher" ? researchThread(botId, task) : null) ?? bot.threadId;
+      deps.send(botId, threadId, prompt).catch((error: unknown) => {
         console.warn(`[review-loop] could not give ${bot.name} its turn: ${error instanceof Error ? error.message : String(error)}`);
       });
     },
@@ -223,14 +241,15 @@ export function createNightShiftLoop(deps: NightShiftLoopDeps): ReviewLoop {
       return threadId;
     },
   });
+  return loop;
 }
 
-/** Books a turn from the usage ledger on the task its bot works on. Only turns in the bot's own chat count: that is
- * where the loop hands it its turns. Never throws, so the ledger's bookkeeping never fails a turn. */
+/** Books a turn from the usage ledger on the task its bot works on. Only turns where the loop hands it its turns
+ * count: the bot's own chat, or a task's own conversation. Never throws, so the ledger's bookkeeping never fails a turn. */
 export function bookTaskTurnUsage(loop: ReviewLoop, store: Pick<LoopStore, "bot">, turn: TurnUsage): WorkTask | null {
   try {
     const bot = store.bot(turn.botId);
-    if (!bot || (turn.threadId !== undefined && turn.threadId !== bot.threadId)) return null;
+    if (!bot || (turn.threadId !== undefined && turn.threadId !== bot.threadId && !loop.taskOfThread(turn.threadId))) return null;
     return loop.noteTurnUsage(turn);
   } catch (error) {
     console.warn(`[review-loop] could not book a turn's tokens on its task: ${error instanceof Error ? error.message : String(error)}`);

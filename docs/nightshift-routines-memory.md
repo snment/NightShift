@@ -63,11 +63,14 @@ When a run of Keeper's routine starts with that line:
    open (any status but `Done`, `Blocked` included), a new run starts no task:
    Keeper says so in one line (`task.routine-still-open`).
 2. Keeper's turn for the run is a one-line prompt: say the task was started.
-3. The loop hands the task to the Researcher in its own chat, as for any
-   research task. The Researcher writes `docs/research/<slug>.md` in the
+3. The loop hands the task to the Researcher in a new conversation of its
+   own, made for this task (saved on the task as `research_thread_id`), so
+   one run's context never carries into the next and the input of a run does
+   not grow week after week. A research task a person makes still goes to the
+   Researcher's own chat. The Researcher writes `docs/research/<slug>.md` in the
    task's worktree with the Write tool (the slug already carries the date; a
    slug without one gets `-YYYY-MM-DD`), then ends its turn.
-4. When the Researcher's turn in its own chat ends, the server looks for that
+4. When the Researcher's turn in the task's conversation ends, the server looks for that
    packet. If it is there and passes the research check, the server finishes
    the task as `research.done` would, recorded as the Researcher. If there is
    no packet, or the check refuses it, the task is set to `Blocked` and Keeper
@@ -103,7 +106,10 @@ without one, so a research run finishes with nobody there:
   stay inside that folder: no `..`, no other folder, no junction or symbolic
   link out, no hard link, no Windows stream name, and `docs/research/` itself
   may not be a link.
-- Only in the Researcher's own chat, where the loop hands it its turns.
+- Only in the conversation where the loop hands the Researcher its current
+  task: a routine task's own conversation while that task is Working there,
+  else the Researcher's own chat. Its other chats never get it, nor does
+  the Researcher's own chat while a routine task is being worked elsewhere.
 - Everything else stays a card: a shell, a read, a write anywhere else, a
   question. No other bot may list `allowWithoutCard` (a usage error), and
   `team apply` takes these grants off any other bot that has them.
@@ -277,7 +283,9 @@ a bot's own step names the bot.
 - **Token booking.** The bot each task last handed a turn to, and its role,
   are saved on the task (`turn_owners`). A turn that a restart cut across, or
   one that ends after the bot's own transition moved the task on, is booked on
-  that task once from its usage-ledger row.
+  that task once from its usage-ledger row. A turn in a routine task's own
+  conversation is booked on that task, whatever its status by then. A
+  restart hands a cut-off routine task back to the same conversation.
 
 ## Audit
 

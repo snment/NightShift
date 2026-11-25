@@ -94,6 +94,9 @@ export interface WorkTask {
   /** Each bot last handed a turn on this task, by id, with the role it played; kept on disk, so the turn that ends with
    * the bot's own transition, or one a restart cut across, is still booked here once after the task has moved on. */
   turn_owners?: Record<string, UsageRole>;
+  /** A routine task's own Researcher conversation, opened when the task is first handed out; kept on disk, so a
+   * restart hands the task back to the same conversation. Absent: the Researcher's own chat. */
+  research_thread_id?: string | null;
   created_by: string;
   created_at: number;
   updated_at: number;

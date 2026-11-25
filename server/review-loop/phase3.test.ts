@@ -11,7 +11,7 @@ import { writeToolPaths } from "../own-file-reads.ts";
 import type { RequestAuth } from "../request-auth.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
 import { localGit } from "./git.ts";
-import { createNightShift, type LoopStore } from "./host.ts";
+import { bookTaskTurnUsage, createNightShift, type LoopStore } from "./host.ts";
 import { BUSY_APPROVAL_REFUSAL, SERVICE_APPROVAL_REFUSAL, SERVICE_PERSON_REFUSAL, localApprovalRefusal } from "./human-approval.ts";
 import { ReviewLoop, type LoopActor, type TaskAuditEvent } from "./loop.ts";
 import { memoryBlockIn, memoryProposalPrompt } from "./memory-file.ts";
@@ -455,5 +455,124 @@ describe("Keeper's memory proposal in its reply", () => {
     expect(readFileSync(join(repo, "MEMORY.md"), "utf8")).toBe(MEMORY);
     ns.turnEnded("id-Keeper", "t-Keeper", `<nightshift-memory>\n${MEMORY}- key sk-ant-api03-${"a".repeat(40)}\n</nightshift-memory>`);
     expect(messages.at(-1)!.message.text).toMatch(/did not propose that MEMORY\.md change: refused/);
+  });
+});
+
+describe("a fresh Researcher conversation for each routine research task", () => {
+  const run = (id: string) => ({ id, routineId: "r-1", routineName: "Weekly", botId: "id-Keeper" });
+  const prompt = routineResearchPrompt({ title: "Agent tooling scan", description: "x" });
+
+  function host(store: LoopStore, dataDir = join(root, "data")) {
+    const sent: Array<{ botId: string; threadId: string; text: string }> = [];
+    const opened: string[] = [];
+    const rows: unknown[] = [];
+    const ns = createNightShift({
+      dataDir, store, git: localGit, cwdOf: () => repo, audit: (row) => rows.push(row), decide: () => undefined,
+      send: async (botId, threadId, text) => { sent.push({ botId, threadId, text }); },
+      openThread: (botId) => { const id = `t-${botId}-task-${opened.length + 1}`; opened.push(id); return id; },
+      hasThread: (_botId, threadId) => opened.includes(threadId) || threadId.startsWith("t-id-Researcher-task-"),
+    });
+    return { ns, sent, opened, rows };
+  }
+  const finish = (ns: ReturnType<typeof host>["ns"], threadId: string) => {
+    const task = ns.loop.list().find((one) => one.status === "Working")!;
+    writeFileSync(join(task.worktree_path!, researchPacketPath(task.slug, "2026-11-24")), RESEARCH);
+    ns.turnEnded("id-Researcher", threadId, "Packet written.");
+    return ns.loop.get(task.id);
+  };
+
+  it("hands each routine task to a new conversation of the Researcher's, saved on the task, and a person's research task to its own chat", () => {
+    const { store } = fakeStore(); const h = host(store);
+    h.ns.routineTurn(run("run-1"), prompt);
+    const [first] = h.ns.loop.list();
+    expect(first!.research_thread_id).toBe("t-id-Researcher-task-1");
+    expect(h.sent.filter((one) => one.botId === "id-Researcher").map((one) => one.threadId)).toEqual(["t-id-Researcher-task-1"]);
+    expect(h.ns.routineTurn(run("run-2"), prompt)).toMatch(/still Working/);
+    expect(h.opened).toHaveLength(1);
+    expect(finish(h.ns, "t-id-Researcher-task-1").status).toBe("Done");
+    h.ns.routineTurn(run("run-3"), prompt);
+    const second = h.ns.loop.list().find((one) => one.status === "Working")!;
+    expect(second.research_thread_id).toBe("t-id-Researcher-task-2");
+    expect(h.sent.filter((one) => one.botId === "id-Researcher").at(-1)!.threadId).toBe("t-id-Researcher-task-2");
+    finish(h.ns, "t-id-Researcher-task-2");
+    const own = h.ns.loop.create({ title: "Check pricing", project: repo, tags: ["research"], created_by: "loopback" }, PERSON);
+    expect(own.research_thread_id).toBeUndefined();
+    expect(h.sent.at(-1)).toMatchObject({ botId: "id-Researcher", threadId: "t-Researcher" });
+  });
+
+  it("gives the allow-list only in the task's conversation while it works there, never in its other chats", () => {
+    const { store } = fakeStore({ Researcher: ALL_KEYS }); const h = host(store);
+    h.ns.routineTurn(run("run-1"), prompt);
+    const [task] = h.ns.loop.list();
+    const packet = join(task!.worktree_path!, researchPacketPath(task!.slug, "2026-11-24"));
+    const chat = task!.research_thread_id!;
+    expect(h.ns.researchGrant("id-Researcher", chat, { tool: "WebSearch" })).toBe("web-search");
+    expect(h.ns.researchGrant("id-Researcher", chat, { tool: "Write", writes: [packet] })).toBe("research-write");
+    expect(h.ns.researchGrant("id-Researcher", chat, { tool: "Write", writes: [join(repo, "docs", "research", "x.md")] })).toBeNull();
+    for (const other of ["t-Researcher", "t-other-chat", "t-id-Researcher-task-9"]) {
+      expect(h.ns.researchGrant("id-Researcher", other, { tool: "WebSearch" }), other).toBeNull();
+      expect(h.ns.researchGrant("id-Researcher", other, { tool: "Write", writes: [packet] }), other).toBeNull();
+    }
+    expect(h.ns.researchGrant("id-Keeper", chat, { tool: "WebSearch" })).toBeNull();
+    finish(h.ns, chat);
+    expect(h.ns.researchGrant("id-Researcher", chat, { tool: "WebSearch" })).toBeNull();
+    expect(h.ns.researchGrant("id-Researcher", "t-Researcher", { tool: "WebSearch" })).toBe("web-search");
+  });
+
+  it("finishes the task as the Researcher only when the turn in its conversation ends, and hands Keeper the report in Keeper's chat", () => {
+    const { store } = fakeStore(); const h = host(store);
+    h.ns.routineTurn(run("run-1"), prompt);
+    const [task] = h.ns.loop.list();
+    writeFileSync(join(task!.worktree_path!, researchPacketPath(task!.slug, "2026-11-24")), RESEARCH);
+    h.ns.turnEnded("id-Researcher", "t-Researcher", "");
+    h.ns.turnEnded("id-Researcher", "t-other-chat", "");
+    expect(h.ns.loop.get(task!.id).status).toBe("Working");
+    h.ns.turnEnded("id-Researcher", task!.research_thread_id!, "Packet written.");
+    expect(h.ns.loop.get(task!.id).status).toBe("Done");
+    expect(JSON.stringify(h.rows.find((row) => JSON.stringify(row).includes("task.research-written")))).toContain("bot:id-Researcher");
+    const report = h.sent.at(-1)!;
+    expect(report).toMatchObject({ botId: "id-Keeper", threadId: "t-Keeper" });
+    expect(report.text).toContain("<research-packet");
+  });
+
+  it("blocks the task for a failed turn in its conversation only", () => {
+    const { store } = fakeStore(); const h = host(store);
+    h.ns.routineTurn(run("run-1"), prompt);
+    const [task] = h.ns.loop.list();
+    h.ns.turnFailed("id-Researcher", "t-Researcher", "a turn elsewhere failed");
+    expect(h.ns.loop.get(task!.id).status).toBe("Working");
+    h.ns.turnFailed("id-Researcher", task!.research_thread_id!, "engine exited");
+    expect(h.ns.loop.get(task!.id)).toMatchObject({ status: "Blocked", blocked_reason: expect.stringContaining("engine exited") });
+  });
+
+  it("books the conversation's turns on its task, across a restart and after the task is Done, and no other chat's", () => {
+    const dataDir = join(root, "data");
+    const { store } = fakeStore(); const h = host(store, dataDir);
+    h.ns.routineTurn(run("run-1"), prompt);
+    const [task] = h.ns.loop.list();
+    const chat = task!.research_thread_id!;
+    expect(bookTaskTurnUsage(h.ns.loop, store, { botId: "id-Researcher", threadId: chat, input: 100, output: 10 })!.token_usage.researcher).toMatchObject({ inputTokens: 100, turns: 1 });
+    const after = host(store, dataDir);
+    writeFileSync(join(task!.worktree_path!, researchPacketPath(task!.slug, "2026-11-24")), RESEARCH);
+    after.ns.turnEnded("id-Researcher", chat, "Packet written.");
+    expect(after.ns.loop.get(task!.id).status).toBe("Done");
+    const booked = bookTaskTurnUsage(after.ns.loop, store, { botId: "id-Researcher", threadId: chat, input: 900, output: 120, model: "claude-sonnet-5-5" })!;
+    expect(booked.id).toBe(task!.id);
+    expect(booked.token_usage.researcher).toMatchObject({ inputTokens: 1_000, outputTokens: 130, turns: 2 });
+    expect(bookTaskTurnUsage(after.ns.loop, store, { botId: "id-Researcher", threadId: "t-other-chat", input: 5, output: 5 })).toBeNull();
+    expect(bookTaskTurnUsage(after.ns.loop, store, { botId: "id-Keeper", threadId: chat, input: 5, output: 5 })).toBeNull();
+    expect(after.ns.loop.get(task!.id).token_usage.researcher).toMatchObject({ inputTokens: 1_000, turns: 2 });
+  });
+
+  it("hands a task a restart cut off back to the same conversation, not a new one", () => {
+    const dataDir = join(root, "data");
+    const { store } = fakeStore(); const h = host(store, dataDir);
+    h.ns.routineTurn(run("run-1"), prompt);
+    const [task] = h.ns.loop.list();
+    const after = host(store, dataDir);
+    expect(after.ns.loop.recoverAfterRestart(() => false).map((one) => one.outcome)).toEqual(["redispatched"]);
+    expect(after.opened).toEqual([]);
+    expect(after.sent.at(-1)).toMatchObject({ botId: "id-Researcher", threadId: task!.research_thread_id });
+    expect(after.sent.at(-1)!.text).toMatch(/NightShift restarted while you worked on this task/);
   });
 });

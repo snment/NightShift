@@ -91,8 +91,8 @@ with `source: "ledger"`. The role's counts add up `inputTokens`,
 - A bot's turns count for the task and role the loop last handed it, including
   the turn that ends with its own transition. After that, its turns count for
   nothing until it is handed a task again.
-- Only turns in the bot's own chat count: that is where the loop hands it its
-  turns.
+- Only turns in the bot's own chat, or in a routine task's own Researcher
+  conversation, count: that is where the loop hands it its turns.
 - A turn whose engine reported no tokens books nothing.
 - After a restart, a bot that still owns a task books on that task.
 
