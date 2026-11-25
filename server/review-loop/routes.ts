@@ -10,6 +10,8 @@ export interface WorkTaskRouteDeps {
   botExists(id: string): boolean;
   /** The person behind a request, for the audit log. */
   person(auth: RequestAuth): string;
+  /** Why this request may not approve a MEMORY.md change or a diff (human-approval.ts), or null. */
+  approvalRefusal?(auth: RequestAuth): string | null;
 }
 
 const TASK = /^\/api\/tasks\/([\w-]+)$/;
@@ -23,8 +25,8 @@ const text = (value: unknown): string | undefined => (typeof value === "string" 
 
 /**
  * Open risk: a bot's shell reaches the server as loopback, like the person's own CLI, so `as_bot` is how a bot names
- * itself and a loopback call without it reads as the person. The diff approval card, answered through the shared card
- * route, is the approval path that a bot's shell cannot answer for the person.
+ * itself and a loopback call without it reads as the person. An approval is held to human-approval.ts: from a local
+ * command without a session, only while every bot is idle.
  */
 export function createWorkTaskRoutes(deps: WorkTaskRouteDeps): RouteHandler {
   const { loop } = deps;
@@ -57,6 +59,8 @@ export function createWorkTaskRoutes(deps: WorkTaskRouteDeps): RouteHandler {
           if (!decision) return json(res, 400, { error: "decision must be approved or denied" });
           const sha = text(body.proposed_sha256);
           if (!sha) return json(res, 400, { error: "proposed_sha256 is required: approve the exact change you read" });
+          const refused = decision === "approved" ? deps.approvalRefusal?.(auth) : null;
+          if (refused) return json(res, 403, { error: refused });
           return json(res, 200, { proposal: memory.decide(found[1]!, decision, sha, actorOf(auth, body)) });
         }
         return json(res, 405, { error: `${method} ${path} is not a team memory route` });
@@ -109,6 +113,8 @@ export function createWorkTaskRoutes(deps: WorkTaskRouteDeps): RouteHandler {
         if (!decision) return json(res, 400, { error: "decision must be approved or denied" });
         const sha = text(body.diff_sha256);
         if (!sha) return json(res, 400, { error: "diff_sha256 is required: approve the exact diff you read" });
+        const refused = decision === "approved" ? deps.approvalRefusal?.(auth) : null;
+        if (refused) return json(res, 403, { error: refused });
         return json(res, 200, { task: loop.decideDiffApproval(m[1]!, text(body.request_id) ?? "", decision, sha, actorOf(auth, body)) });
       }
       return json(res, 405, { error: `${method} ${path} is not a task route` });
